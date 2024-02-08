@@ -1,10 +1,12 @@
 import os
 import numpy as np
 import pandas as pd
-import librosa
-from datasets import load_dataset, concatenate_datasets
+import re
+from config import Config
+from datasets import load_dataset, concatenate_datasets, Audio
+from dataclasses import dataclass
 
-SR = 16000
+SR = Config.sample_rate
 
 class Coraal:
     def __init__(self, path_to_coraal="data/coraal"):
@@ -48,7 +50,7 @@ class Coraal:
                             "file_id", "Gender", "Age", "Occupation"]
         
         data = data[selected_columns]
-        data.columns = ["start_frame", "end_frame", "content", "path_to_audio", 
+        data.columns = ["start_frame", "end_frame", "transcription", "path_to_audio", 
                         "file_id", "gender", "age", "occupation"]
         
         data["location"] = " ".join(location.split("_"))
@@ -67,13 +69,26 @@ class SpeechAccentArchive:
     def __init__(self, path_to_root="data/speech_accent_archive/"):
         self.path_to_root = path_to_root
         self.path_to_audio = os.path.join(self.path_to_root, "recordings/recordings/")
+        self.path_to_transcript = os.path.join(self.path_to_root, "reading-passage.txt")
         self.metadata = pd.read_csv(os.path.join(path_to_root, "speakers_all.csv"))
+        
+        ### Load in Transcription ###
+        self.load_transcript()
 
+    def load_transcript(self):
+        with open(self.path_to_transcript, "r") as f:
+            transcript = f.readlines()[0]
+        transcript = re.sub(r"[^a-zA-Z\s]", "", transcript).lower().strip()
+
+        ### Cleanup double spaces ###
+        self.transcript = " ".join(transcript.split())
+        
     def build_dataset(self):
         self.metadata["path_to_audio"] = self.path_to_audio + self.metadata["filename"] + ".mp3"
         self.metadata["audio_check"] = self.metadata["path_to_audio"].map(lambda x: os.path.isfile(x))
         self.metadata = self.metadata.loc[self.metadata["audio_check"] == True].reset_index(drop=True)
         self.metadata = self.metadata[["age", "birthplace", "native_language", "sex", "path_to_audio"]]
+        self.metadata["transcription"] = self.transcript
         return self.metadata
 
 class Edacc:
@@ -95,7 +110,7 @@ class Edacc:
                 transcripts = f.readlines()
 
             cleaned_transcript = {"segment_id": [], 
-                                  "transcript": []}
+                                  "transcription": []}
             for t in transcripts:
                 t = t.split()
                 segment_id = t[0]
@@ -113,7 +128,7 @@ class Edacc:
 
                 if len(cleaned_statement) >=8:
                     cleaned_transcript["segment_id"].append(segment_id)
-                    cleaned_transcript["transcript"].append(" ".join(cleaned_statement))
+                    cleaned_transcript["transcription"].append(" ".join(cleaned_statement))
 
             ### Load and Prep Segments ###
             with open(segments, "r") as f: 
@@ -139,12 +154,12 @@ class Edacc:
             
         dataset = pd.concat(dataset)
 
-        ### Compute Start and End Frames ###
-        audio_files = list(dataset["path_to_audio"].unique())
-
         ### Will later sample to 16000 Hz so get start and end frame ###
         dataset["start_frame"] = dataset["start"] * SR
         dataset["end_frame"] = dataset["end"] * SR
+
+        ### Remove any Special Characters from Transcript and Lowecase ###
+        dataset["transcription"] = dataset["transcription"].str.replace('[^a-zA-Z\s]', '', regex=True).str.lower()
 
         return dataset
 
@@ -178,7 +193,7 @@ class L2Arctic:
 
         metadata = pd.DataFrame.from_dict(metadata)
 
-        transcript_data = {"transcript": [], 
+        transcript_data = {"transcription": [], 
                            "path_to_audio": [],
                            "speaker_id": []}
         
@@ -194,11 +209,13 @@ class L2Arctic:
                     with open(os.path.join(path_to_speaker_transcripts, path_to_transcript)) as f:
                         transcript = (" ".join(f.readlines())).strip()
 
-                    transcript_data["transcript"].append(transcript)
+                    transcript_data["transcription"].append(transcript)
                     transcript_data["path_to_audio"].append(path_to_audio)
                     transcript_data["speaker_id"].append(path_to_audio.split("/")[2])
 
         transcript_data = pd.DataFrame.from_dict(transcript_data)
+        transcript_data["transcription"] = transcript_data["transcription"].str.replace('[^a-zA-Z\s]', '', regex=True).str.lower()
+
         data = pd.merge(transcript_data, metadata, how="left")
         return data
 
@@ -213,4 +230,18 @@ class Mozilla:
         dataset_val = dataset["validation"]
         dataset_test = dataset["test"]
         dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
-        return dataset 
+        dataset = dataset.rename_column("sentence", "transcription")
+        dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
+                                          "locale", "segment", "variant"])
+        dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
+
+        return dataset
+    
+
+@dataclass
+class SupportedDatasets:
+    """
+    Quick class for data implementation sanity check
+    """
+    supported_dataset: tuple = (Coraal, SpeechAccentArchive, \
+                               Edacc, L2Arctic, Mozilla())

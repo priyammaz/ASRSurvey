@@ -289,5 +289,3 @@ class PrepareMozillaCommonVoice:
         cv_13 = load_dataset("mozilla-foundation/common_voice_13_0", "en", 
                              cache_dir=self.path_to_root, 
                              num_proc=num_workers)
-
-

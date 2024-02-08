@@ -147,6 +147,8 @@ class InferenceAudios:
             transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
             batch["unispeech_pred_transcription"] = transcriptions
             self.unispeech_results.append(batch)
+
+        self.unispeech_results = self._merge_results(self.unispeech_results)
     
     @torch.no_grad()
     def inference_unispeechsat(self):
@@ -164,6 +166,8 @@ class InferenceAudios:
             batch["unispeechsat_transcription"] = transcriptions
             self.unispeechsat_results.append(batch)
 
+        self.unispeechsat_results = self._merge_results(self.unispeechsat_results)
+
     @torch.no_grad()
     def inference_wav2vec2(self):
         print("Inferencing with Wav2Vec2")
@@ -179,6 +183,8 @@ class InferenceAudios:
             transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
             batch["wav2vec2_pred_transcription"] = transcriptions
             self.wav2vec2_results.append(batch)
+
+        self.wav2vec2_results = self._merge_results(self.wav2vec2_results)
 
     @torch.no_grad()
     def inference_conformer(self):
@@ -196,6 +202,8 @@ class InferenceAudios:
             batch["conformer_pred_transcription"] = transcriptions
             self.conformer_results.append(batch)
 
+        self.conformer_results = self._merge_results(self.conformer_results)
+
     @torch.no_grad()
     def inference_wavlm(self):
         print("Inferencing with WavLM")
@@ -212,6 +220,8 @@ class InferenceAudios:
             batch["wavlm_pred_transcription"] = transcriptions
             self.wavlm_results.append(batch)
 
+        self.wavlm_results = self._merge_results(self.wavlm_results)
+
     @torch.no_grad()
     def inference_whisper(self):
         print("Inferencing with Whisper")
@@ -227,6 +237,9 @@ class InferenceAudios:
             transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
             batch["whisper_pred_transcription"] = transcriptions
             self.whisper_results.append(batch)
+
+        self.whisper_results = self._merge_results(self.whisper_results)
+
 
 
     def inference(self, path_to_store):

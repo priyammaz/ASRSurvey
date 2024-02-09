@@ -9,7 +9,7 @@ from config import Config
 from accelerate import Accelerator, utils
 from transformers import AutoProcessor, SEWForCTC, SEWDForCTC, Speech2TextProcessor, Speech2TextForConditionalGeneration, \
                             UniSpeechForCTC, UniSpeechSatForCTC, Wav2Vec2ForCTC, Wav2Vec2ConformerForCTC, WavLMForCTC, WhisperForConditionalGeneration, \
-                                WhisperProcessor
+                                WhisperProcessor, SpeechT5Processor, SpeechT5ForSpeechToText
 
 
 class InferenceAudios:
@@ -32,15 +32,7 @@ class InferenceAudios:
                  dataset,
                  batch_size=128, 
                  device="cuda" if torch.cuda.is_available else "cpu",
-                 sew_config="patrickvonplaten/sew-mid-100k-librispeech-clean-100h-ft", 
-                 sewd_config="asapp/sew-d-base-plus-400k-ft-ls100h", 
-                 speech2text_config="facebook/s2t-large-librispeech-asr",
-                 unispeech_config="patrickvonplaten/unispeech-large-1500h-cv-timit",
-                 unispeechsat_config="microsoft/unispeech-sat-base-100h-libri-ft",
-                 wav2vec2_config="facebook/wav2vec2-base-960h",
-                 conformer_config="facebook/wav2vec2-conformer-rope-large-960h-ft",
-                 wavlm_config="patrickvonplaten/wavlm-libri-clean-100h-base-plus", 
-                 whisper_config="openai/whisper-medium"):
+                 model_config=None):
     
         assert isinstance(dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
 
@@ -49,15 +41,17 @@ class InferenceAudios:
         self.device = device
         self.model_store = Config.path_to_pretrained_models
         self.sr = Config.sample_rate
-        self.model_configs = {"sew": sew_config, 
-                              "sewd": sewd_config,
-                              "speech2text": speech2text_config, 
-                              "unispeech": unispeech_config,
-                              "unispeechsat": unispeechsat_config,
-                              "wav2vec2": wav2vec2_config,
-                              "conformer": conformer_config, 
-                              "wavlm": wavlm_config, 
-                              "whisper": whisper_config}
+
+        if model_config is None:
+            self.model_configs = {"sew": sew_config, 
+                                  "sewd": sewd_config,
+                                  "speech2text": speech2text_config, 
+                                  "unispeech": unispeech_config,
+                                  "unispeechsat": unispeechsat_config,
+                                  "wav2vec2": wav2vec2_config,
+                                  "conformer": conformer_config, 
+                                  "wavlm": wavlm_config, 
+                                  "whisper": whisper_config}
 
         self._init_results()
     
@@ -145,14 +139,21 @@ class InferenceAudios:
         results = self.distributed_inference(processor=processor, 
                                              model=model, 
                                              forward_pass=self.default_forward_pass)
-        # for batch in self.loader:
-        #     audio = batch.pop("audio")
-        #     inputs = processor(audio, sampling_rate=16000, return_tensors="pt", padding=True)
-        #     print(inputs)
-        #     break
+
         results = self._flatten_dict_list(results)
         results = pd.DataFrame.from_dict(results)
-        results.to_csv("hello.csv")
+        results.to_csv("sew.csv")
+
+        processor = AutoProcessor.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
+        model = SEWDForCTC.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
+
+        results = self.distributed_inference(processor=processor, 
+                                             model=model, 
+                                             forward_pass=self.default_forward_pass)
+ 
+        results = self._flatten_dict_list(results)
+        results = pd.DataFrame.from_dict(results)
+        results.to_csv("sewd.csv")
             
 
 

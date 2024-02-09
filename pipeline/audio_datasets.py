@@ -244,4 +244,4 @@ class SupportedDatasets:
     Quick class for data implementation sanity check
     """
     supported_dataset: tuple = (Coraal, SpeechAccentArchive, \
-                               Edacc, L2Arctic, Mozilla())
+                               Edacc, L2Arctic, Mozilla)

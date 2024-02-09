@@ -9,16 +9,21 @@ from audio_datasets import Coraal, SpeechAccentArchive, Edacc, L2Arctic, Mozilla
 SR = Config.sample_rate
 
 class AudioLoader(Dataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, load_array=True):
         self.dataset = dataset
+        self.load_array = load_array
     
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        row = dict(self.dataset.loc[idx, :])
-        audio = librosa.load(row["path_to_audio"], sr=SR)[0]
-        row["audio"] = audio
+        if self.load_array:
+            row = dict(self.dataset.loc[idx, :])
+            audio = librosa.load(row["path_to_audio"], sr=SR)[0]
+            row["audio"] = audio
+        else:
+            row = self.dataset[idx]
+
         return row
 
 class BatchPreparation:
@@ -44,7 +49,7 @@ class BatchPreparation:
     def __init__(self, 
                  dataset, 
                  batch_size=128, 
-                 num_workers=8):
+                 num_workers=0):
         
         self.dataset = dataset
         self.batch_size = batch_size
@@ -112,25 +117,25 @@ class BatchPreparation:
         
 
         print("Cutting Down Audio to Segments")
-        all_batches = []
-        batch = []
+        samples = []
 
         for idx, row in dataset.iterrows():
-            data = dict(row)
-
             try:
+                data = dict(row)
                 audio_slice = audio_dict[row["path_to_audio"]][int(row["start_frame"]):int(row["end_frame"])]
                 data["audio"] = audio_slice
-                batch.append(data)
-
-                if (len(batch) == self.batch_size) or (idx == len(dataset) - 1):
-                    batch_dict = self._collate_function(batch)
-                    all_batches.append(batch_dict)
-                    batch = []
+                samples.append(data)
             except:
                 continue
 
-        return all_batches
+
+        dataset = AudioLoader(samples, load_array=False)
+        loader = DataLoader(dataset, 
+                            batch_size=self.batch_size, 
+                            collate_fn=self._collate_function, 
+                            num_workers=self.num_workers)
+        
+        return loader
 
     def realtime_load(self):
 

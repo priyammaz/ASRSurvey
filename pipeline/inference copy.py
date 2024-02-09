@@ -30,7 +30,7 @@ class InferenceAudios:
     """
     def __init__(self, 
                  dataset,
-                 batch_size=128, 
+                 batch_size=4, 
                  device="cuda" if torch.cuda.is_available else "cpu",
                  sew_config="patrickvonplaten/sew-mid-100k-librispeech-clean-100h-ft", 
                  sewd_config="asapp/sew-d-base-plus-400k-ft-ls100h", 
@@ -40,7 +40,7 @@ class InferenceAudios:
                  wav2vec2_config="facebook/wav2vec2-base-960h",
                  conformer_config="facebook/wav2vec2-conformer-rope-large-960h-ft",
                  wavlm_config="patrickvonplaten/wavlm-libri-clean-100h-base-plus", 
-                 whisper_config="openai/whisper-medium"):
+                 whisper_config="openai/whisper-tiny"):
     
         assert isinstance(dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
 
@@ -241,8 +241,13 @@ class InferenceAudios:
             audio = batch.pop("audio")
             inputs = processor(audio, sampling_rate=self.sr, return_tensors="pt").input_features.to(self.device)
             generated_ids = model.generate(inputs=inputs)
+            print(generated_ids)
+            print(generated_ids.shape)
             transcriptions = processor.batch_decode(generated_ids, skip_special_tokens=True)
             transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
+            print(transcriptions)
+            print(len(transcriptions))
+            assaas
             batch["whisper_pred_transcription"] = transcriptions
             self.whisper_results.append(batch)
 
@@ -251,33 +256,33 @@ class InferenceAudios:
 
 
     def inference(self, path_to_store):
-        self.inference_sew()
-        self.inference_sewd()
-        self.inference_speech2text()
-        self.inference_unispeech()
-        self.inference_unispeechsat()
-        self.inference_wav2vec2()
-        self.inference_conformer()
-        self.inference_wavlm()
+        # self.inference_sew()
+        # self.inference_sewd()
+        # self.inference_speech2text()
+        # self.inference_unispeech()
+        # self.inference_unispeechsat()
+        # self.inference_wav2vec2()
+        # self.inference_conformer()
+        # self.inference_wavlm()
         self.inference_whisper()
 
-        final_results = [self.sew_results, self.sewd_results, self.speech2text_results, 
-                         self.unispeech_results, self.unispeechsat_results, self.wav2vec2_results, 
-                         self.conformer_results, self.wavlm_results, self.whisper_results]
+        # final_results = [self.sew_results, self.sewd_results, self.speech2text_results, 
+        #                  self.unispeech_results, self.unispeechsat_results, self.wav2vec2_results, 
+        #                  self.conformer_results, self.wavlm_results, self.whisper_results]
 
-        ### Remove Outputs from Models not Run ###
-        final_results = [r for r in final_results if r is not None]
+        # ### Remove Outputs from Models not Run ###
+        # final_results = [r for r in final_results if r is not None]
 
-        ### Merge Dataframes Together ###
-        if len(final_results) > 1:
-            merged_results =  final_results[0]
-            merge_cols = [col for col in merged_results.columns if "_pred_" not in col]
-            for result in final_results[1:]:
-                merged_results = pd.merge(merged_results, result,
-                                          how="left", left_on=merge_cols,
-                                          right_on=merge_cols)
+        # ### Merge Dataframes Together ###
+        # if len(final_results) > 1:
+        #     merged_results =  final_results[0]
+        #     merge_cols = [col for col in merged_results.columns if "_pred_" not in col]
+        #     for result in final_results[1:]:
+        #         merged_results = pd.merge(merged_results, result,
+        #                                   how="left", left_on=merge_cols,
+        #                                   right_on=merge_cols)
         
-        merged_results.to_csv(path_to_store, index=False)
+        # merged_results.to_csv(path_to_store, index=False)
         
     
     
@@ -286,6 +291,6 @@ class InferenceAudios:
 
 if __name__ == "__main__":
     from audio_datasets import L2Arctic
-    ia = InferenceAudios(batch_size=64, dataset=L2Arctic())
+    ia = InferenceAudios(batch_size=4, dataset=L2Arctic())
     ia.inference(path_to_store="results/l2arctic_testing.csv")
         

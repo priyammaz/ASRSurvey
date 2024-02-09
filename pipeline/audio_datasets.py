@@ -229,13 +229,17 @@ class Mozilla:
         dataset_train = dataset["train"]
         dataset_val = dataset["validation"]
         dataset_test = dataset["test"]
-        dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
-        dataset = dataset.rename_column("sentence", "transcription")
-        dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
-                                          "locale", "segment", "variant"])
-        dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
 
-        return dataset
+        dataset_val = dataset_val.filter(lambda example: example["accent"]!="")
+        print(dataset_val)
+        # dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
+        # dataset = dataset.rename_column("sentence", "transcription")
+        # dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
+        #                                   "locale", "segment", "variant"])
+        # dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
+        # dataset = dataset.filter(lambda example: example["accent"]!="")
+        # print(dataset_train)
+        # return dataset
     
 
 @dataclass
@@ -245,3 +249,9 @@ class SupportedDatasets:
     """
     supported_dataset: tuple = (Coraal, SpeechAccentArchive, \
                                Edacc, L2Arctic, Mozilla)
+    
+
+
+if __name__ == "__main__":
+    data = Mozilla().build_dataset()
+    print(data)

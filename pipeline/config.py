@@ -76,9 +76,9 @@ class Config:
                                   "model": WhisperForConditionalGeneration, 
                                   "configs": [
                                       {"model_config": "openai/whisper-tiny", "params": 37760640},
+                                      {"model_config": "openai/whisper-base", "params": 72593920},
                                       {"model_config": "openai/whisper-small", "params": 241734912},
                                       {"model_config": "openai/whisper-medium", "params": 763857920},
-                                      {"model_config": "openai/whisper-base", "params": 72593920},
                                       {"model_config": "openai/whisper-large-v2", "params": 1543304960}
                                   ]},
 

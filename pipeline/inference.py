@@ -36,22 +36,11 @@ class InferenceAudios:
     
         assert isinstance(dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
 
-        self.loader = BatchPreparation(dataset, batch_size=batch_size, num_workers=4).build_dataloader()
+        self.loader = BatchPreparation(dataset, batch_size=batch_size, num_workers=8).build_dataloader()
 
         self.device = device
         self.model_store = Config.path_to_pretrained_models
         self.sr = Config.sample_rate
-
-        if model_config is None:
-            self.model_configs = {"sew": sew_config, 
-                                  "sewd": sewd_config,
-                                  "speech2text": speech2text_config, 
-                                  "unispeech": unispeech_config,
-                                  "unispeechsat": unispeechsat_config,
-                                  "wav2vec2": wav2vec2_config,
-                                  "conformer": conformer_config, 
-                                  "wavlm": wavlm_config, 
-                                  "whisper": whisper_config}
 
         self._init_results()
     
@@ -79,8 +68,8 @@ class InferenceAudios:
                              processor,
                              model):
         
-        ### Prepare Inputs and Pass to Model ###
-        inputs = processor(audio, sampling_rate=16000, return_tensors="pt", padding=True)
+        ### Prepare Inputs and Place in Correct GPU ###
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt", padding=True).to(model.device)
         logits = model(**inputs).logits
 
         ### Gather logits across GPU's ###
@@ -92,7 +81,31 @@ class InferenceAudios:
         transcriptions = processor.batch_decode(predicted_ids)
         transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
         return transcriptions
+    
+    def whisper_forward_pass(self,
+                             accelerator, 
+                             audio, 
+                             processor, 
+                             model):
         
+        ### Process Input and Place in Correct GPU ###
+        inputs = processor(audio, sampling_rate=self.sr, return_tensors="pt").input_features.to(model.device)
+
+        ### Need to Unwrap Model, we need to to .generate() but distributed method only has foward() ###
+        unwrapped_model = accelerator.unwrap_model(model)
+        generated_ids = unwrapped_model.generate(inputs=inputs)
+
+        ### Gather Logits Across GPUS ###
+        generated_ids = accelerator.pad_across_processes(generated_ids, dim=1)
+        generated_ids = accelerator.gather(generated_ids)
+
+        ### Decode and Cleanup Transcriptions ###
+        transcriptions = processor.batch_decode(generated_ids, skip_special_tokens=True)
+        transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
+        return transcriptions
+
+
+
     @torch.no_grad()
     def distributed_inference(self, 
                               processor, 
@@ -108,6 +121,7 @@ class InferenceAudios:
         progress_bar = tqdm(range(len(loader)))
 
         results = []
+        counter = 0 
         for batch in loader:
             audio = batch.pop("audio")
             
@@ -128,37 +142,41 @@ class InferenceAudios:
             batch["transcriptions"] = transcriptions
             results.append(batch)
             progress_bar.update(1)
+
+            counter += 1
+            if counter == 10:
+                break
         
         return results
 
     
     def inference(self):
-        processor = AutoProcessor.from_pretrained("patrickvonplaten/sew-mid-100k-librispeech-clean-100h-ft", cache_dir="models/")
-        model = SEWForCTC.from_pretrained("patrickvonplaten/sew-mid-100k-librispeech-clean-100h-ft", cache_dir="models/")
+        processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2", cache_dir="models/")
+        model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2", cache_dir="models/")
 
         results = self.distributed_inference(processor=processor, 
                                              model=model, 
-                                             forward_pass=self.default_forward_pass)
+                                             forward_pass=self.whisper_forward_pass)
 
         results = self._flatten_dict_list(results)
         results = pd.DataFrame.from_dict(results)
-        results.to_csv("sew.csv")
+        results.to_csv("whisper.csv")
 
-        processor = AutoProcessor.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
-        model = SEWDForCTC.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
+        # processor = AutoProcessor.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
+        # model = SEWDForCTC.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
 
-        results = self.distributed_inference(processor=processor, 
-                                             model=model, 
-                                             forward_pass=self.default_forward_pass)
+        # results = self.distributed_inference(processor=processor, 
+        #                                      model=model, 
+        #                                      forward_pass=self.default_forward_pass)
  
-        results = self._flatten_dict_list(results)
-        results = pd.DataFrame.from_dict(results)
-        results.to_csv("sewd.csv")
+        # results = self._flatten_dict_list(results)
+        # results = pd.DataFrame.from_dict(results)
+        # results.to_csv("sewd.csv")
             
 
 
 if __name__ == "__main__":
     from audio_datasets import L2Arctic
-    ia = InferenceAudios(batch_size=64, dataset=L2Arctic())
+    ia = InferenceAudios(batch_size=8, dataset=L2Arctic())
     ia.inference()
         

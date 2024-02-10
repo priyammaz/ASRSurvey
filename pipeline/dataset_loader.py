@@ -36,12 +36,13 @@ class BatchPreparation:
     (1) Pre-Batch Data:
     CORAAL and EDACC have long form audio along with the start and end times of phrases, 
     we can preload all the audio into batches of tuples containing audio, transcript and metadata
+    and then pass to our Audioloader
 
     (2) Realtime Loading:
     Speech Accent Archive and L2 Arctic contain audio clips cut up into shorter segments and 
-    we can just load them as we grab batches from our dataset
+    we can just load them as we grab batches from our dataset with the AudioLoader
 
-    (3) Hugginface Datset
+    (3) Huggingface Datset
     Mozilla Common Voice is a huggingface dataset so we can just use regular PyTorch Dataloaders
 
     """

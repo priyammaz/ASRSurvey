@@ -9,7 +9,7 @@ from dataclasses import dataclass
 SR = Config.sample_rate
 
 class Coraal:
-    def __init__(self, path_to_coraal="data/coraal"):
+    def __init__(self, path_to_coraal=Config.dataset_catalog["CORAAL"]):
 
         self.path_to_coraal = path_to_coraal
         self.location_dirs = ['atlanta_georgia', 'detroit_michicagn', 'lower_east_side_new_york',  \
@@ -65,8 +65,9 @@ class Coraal:
         data = pd.concat(dataset).reset_index(drop=True)
         return data
 
+
 class SpeechAccentArchive:
-    def __init__(self, path_to_root="data/speech_accent_archive/"):
+    def __init__(self, path_to_root=Config.dataset_catalog["SpeechAccentArchive"]):
         self.path_to_root = path_to_root
         self.path_to_audio = os.path.join(self.path_to_root, "recordings/recordings/")
         self.path_to_transcript = os.path.join(self.path_to_root, "reading-passage.txt")
@@ -91,8 +92,9 @@ class SpeechAccentArchive:
         self.metadata["transcription"] = self.transcript
         return self.metadata
 
+
 class Edacc:
-    def __init__(self, path_to_root="data/edacc/"):
+    def __init__(self, path_to_root=Config.dataset_catalog["EDACC"]):
         self.path_to_files = os.path.join(path_to_root, "edacc_v1.0")
         self.path_to_audios = os.path.join(self.path_to_files, "data")
         self.path_to_metadata = os.path.join(self.path_to_files, "linguistic_background.csv")
@@ -164,7 +166,7 @@ class Edacc:
         return dataset
 
 class L2Arctic:
-    def __init__(self, path_to_root="data/l2arctic"):
+    def __init__(self, path_to_root=Config.dataset_catalog["L2Arctic"]):
         self.path_to_root = path_to_root
         self.path_to_md = os.path.join(path_to_root, "README.md")
 
@@ -220,7 +222,7 @@ class L2Arctic:
         return data
 
 class Mozilla:
-    def __init__(self, path_to_root="data/mozilla", num_proc=8):
+    def __init__(self, path_to_root=Config.dataset_catalog["MozillaCommonVoice"], num_proc=8):
         self.path_to_root = path_to_root
         self.num_proc = num_proc
 
@@ -230,16 +232,13 @@ class Mozilla:
         dataset_val = dataset["validation"]
         dataset_test = dataset["test"]
 
-        dataset_val = dataset_val.filter(lambda example: example["accent"]!="")
-        print(dataset_val)
-        # dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
-        # dataset = dataset.rename_column("sentence", "transcription")
-        # dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
-        #                                   "locale", "segment", "variant"])
-        # dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
-        # dataset = dataset.filter(lambda example: example["accent"]!="")
-        # print(dataset_train)
-        # return dataset
+        dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
+        dataset = dataset.rename_column("sentence", "transcription")
+        dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
+                                          "locale", "segment", "variant"])
+        dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
+        dataset = dataset.filter(lambda example: example["accent"]!="")
+        return dataset
     
 
 @dataclass

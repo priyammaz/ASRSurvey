@@ -286,6 +286,22 @@ class PrepareMozillaCommonVoice:
 
     def prepare(self, num_workers=8):
         print("This will take some time and about 130GB Hard Drive Space!")
-        cv_13 = load_dataset("mozilla-foundation/common_voice_13_0", "en", 
-                             cache_dir=self.path_to_root, 
-                             num_proc=num_workers)
+        dataset = load_dataset("mozilla-foundation/common_voice_13_0", "en", 
+                               cache_dir=self.path_to_root, 
+                               num_proc=num_workers)
+
+
+        print("Preprocessing to Remove Samples with Unlabeled Accents. THIS WILL TAKE SOME TIME!!!")
+
+        dataset = dataset.rename_column("sentence", "transcription")
+        dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
+                                        "locale", "segment", "variant"])
+        dataset = dataset.filter(lambda example: example["accent"]!="", num_proc=num_workers)
+        
+        print("Save the Filtered Dataset to Disk")
+        dataset.save_to_disk(os.path.join(self.path_to_root, "accented_mozilla.hf"))
+
+
+
+if __name__ == "__main__":
+    PrepareMozillaCommonVoice().prepare()

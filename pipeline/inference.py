@@ -30,15 +30,22 @@ class InferenceAudios:
     """
     def __init__(self, 
                  dataset,
-                 batch_size=128, 
-                 device="cuda" if torch.cuda.is_available else "cpu",
+                 batch_size="auto", 
+                 num_workers=8,
                  model_config=None):
     
         assert isinstance(dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
 
-        self.loader = BatchPreparation(dataset, batch_size=batch_size, num_workers=8).build_dataloader()
+        self.auto_batch_flag = True if batch_size == "auto" else False
+        if self.auto_batch_flag:
+            self.batch_size = 128
+        else:
+            self.batch_size = batch_size
 
-        self.device = device
+        self.num_workers = num_workers
+        self.bp = BatchPreparation(dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+        self.loader = self.bp.build_dataloader()
+
         self.model_store = Config.path_to_pretrained_models
         self.sr = Config.sample_rate
 
@@ -116,40 +123,58 @@ class InferenceAudios:
         accelerator = Accelerator()
         model, loader = accelerator.prepare(model, self.loader)
         model.eval()
-
-        ### Iterate through Dataset ###
-        progress_bar = tqdm(range(len(loader)))
-
-        results = []
-        counter = 0 
-        for batch in loader:
-            audio = batch.pop("audio")
-            
-            ### Packaged batch into a dummy list for gather later ###
-            batch = [batch]
-
-            ### Prep and Pass Through Model ###
-            transcriptions = forward_pass(accelerator=accelerator,
-                                          audio=audio, 
-                                          processor=processor,
-                                          model=model)
         
-            ### Gather Batch Metadata ###
-            batch = utils.gather_object(batch)
-            batch = self._flatten_dict_list(batch)
+        while True:
+            try:
+                ### Iterate through Dataset ###
+                progress_bar = tqdm(range(len(loader)))
 
-            ### Add Transcriptions to Batch ###
-            batch["transcriptions"] = transcriptions
-            results.append(batch)
-            progress_bar.update(1)
+                results = []
+                counter = 0 
+                for batch in loader:
+                    audio = batch.pop("audio")
+                    
+                    ### Packaged batch into a dummy list for gather later ###
+                    batch = [batch]
 
-            counter += 1
-            if counter == 10:
+                    ### Prep and Pass Through Model ###
+                    transcriptions = forward_pass(accelerator=accelerator,
+                                                audio=audio, 
+                                                processor=processor,
+                                                model=model)
+                
+                    ### Gather Batch Metadata ###
+                    batch = utils.gather_object(batch)
+                    batch = self._flatten_dict_list(batch)
+
+                    ### Add Transcriptions to Batch ###
+                    batch["transcriptions"] = transcriptions
+                    results.append(batch)
+                    progress_bar.update(1)
+
+                    counter += 1
+                    if counter == 10:
+                        break
+                return results
+
+            except torch.cuda.OutOfMemoryError as e:
+                updated_batch_size = self.batch_size // 2
+                
+                if (self.auto_batch_flag) and (updated_batch_size > 1) and accelerator.is_local_main_process:
+                    print(f"Reducing Batch Size from {self.batch_size} to {updated_batch_size}")
+                    self.batch_size = updated_batch_size
+                    loader = self.bp.update_batch_size(new_batch_size=self.batch_size)
+                    loader = accelerator.prepare(loader)
+                    continue
+                else:
+                    print("Failed Inference, Not Enough Memory for Model")
+                    break
+            
+            except Exception as e:
+                print(e.message)
                 break
         
-        return results
-
-    
+        
     def inference(self):
         processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2", cache_dir="models/")
         model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2", cache_dir="models/")
@@ -177,6 +202,6 @@ class InferenceAudios:
 
 if __name__ == "__main__":
     from audio_datasets import L2Arctic
-    ia = InferenceAudios(batch_size=8, dataset=L2Arctic())
+    ia = InferenceAudios(batch_size="auto", dataset=L2Arctic())
     ia.inference()
         

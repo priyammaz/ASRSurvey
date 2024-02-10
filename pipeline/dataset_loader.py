@@ -52,18 +52,25 @@ class BatchPreparation:
                  batch_size=128, 
                  num_workers=0):
         
-        self.dataset = dataset
+        self.dataset_class = dataset
+        self.manifest = self.dataset_class.build_dataset()
         self.batch_size = batch_size
         self.num_workers = num_workers
 
     def build_dataloader(self, limit_audio_num=None):
 
-        if isinstance(self.dataset, (Coraal, Edacc)):
-            dataloader = self.pre_batch_data(limit_audio_num)
-        elif isinstance(self.dataset, (SpeechAccentArchive, L2Arctic)):
-            dataloader = self.realtime_load()
-        elif isinstance(self.dataset, (Mozilla)):
-            dataloader = self.huggingface_loader(collate_fn=self._mozilla_collate_function)
+        if isinstance(self.dataset_class, (Coraal, Edacc)):
+            self.collate_function = self._collate_function
+            dataloader = self.pre_batch_data(collate_fn=self.collate_function,
+                                             limit_audio_num=limit_audio_num)
+            
+        elif isinstance(self.dataset_class, (SpeechAccentArchive, L2Arctic)):
+            self.collate_function = self._collate_function
+            dataloader = self.realtime_load(collate_fn=self.collate_function)
+
+        elif isinstance(self.dataset_class, (Mozilla)):
+            self.collate_function = self._mozilla_collate_function
+            dataloader = self.huggingface_loader(collate_fn=self.collate_function)
         
         return dataloader
 
@@ -93,22 +100,18 @@ class BatchPreparation:
             e["audio"] = e["audio"]["array"]
         return self._collate_function(examples)
 
-    def pre_batch_data(self, limit_audio_num=None):
+    def pre_batch_data(self, collate_fn, limit_audio_num=None):
 
         """
         Loads all data to memory and then cuts/batches segments for inference 
 
         """
-
-        ### Build Dataframe of Audio Information ###
-        dataset = self.dataset.build_dataset()
-        
-        assert ("start_frame" in dataset.columns) and ("end_frame" in dataset.columns), "Prebatching is for longform audio with preset-segments"
+        assert ("start_frame" in self.manifest.columns) and ("end_frame" in self.manifest.columns), "Prebatching is for longform audio with preset-segments"
         if limit_audio_num is not None:
             assert isinstance(limit_audio_num, int), "Limit the number of audios loaded to memory with an integer input for limit_audio_num"
 
         print("Loading all Audio to Memory")
-        audios = dataset.path_to_audio.unique()
+        audios = self.manifest.path_to_audio.unique()
         if limit_audio_num is not None:
             audios = audios[:limit_audio_num]
 
@@ -120,7 +123,7 @@ class BatchPreparation:
         print("Cutting Down Audio to Segments")
         samples = []
 
-        for idx, row in dataset.iterrows():
+        for idx, row in self.manifest.iterrows():
             try:
                 data = dict(row)
                 audio_slice = audio_dict[row["path_to_audio"]][int(row["start_frame"]):int(row["end_frame"])]
@@ -130,26 +133,25 @@ class BatchPreparation:
                 continue
 
 
-        dataset = AudioLoader(samples, load_array=False)
-        loader = DataLoader(dataset, 
+        self.dataset = AudioLoader(samples, load_array=False)
+        loader = DataLoader(self.dataset, 
                             batch_size=self.batch_size, 
-                            collate_fn=self._collate_function, 
+                            collate_fn=collate_fn, 
                             num_workers=self.num_workers)
         
         return loader
 
-    def realtime_load(self):
+    def realtime_load(self, collate_fn):
 
         """
         Load audios as they come in with super simple Dataset class AudioLoader
 
         """
 
-        dataset = self.dataset.build_dataset()
-        dataset = AudioLoader(dataset)
-        loader = DataLoader(dataset, 
+        self.dataset = AudioLoader(self.manifest)
+        loader = DataLoader(self.dataset, 
                             batch_size=self.batch_size, 
-                            collate_fn=self._collate_function,
+                            collate_fn=collate_fn,
                             num_workers=self.num_workers)
         
         return loader
@@ -161,42 +163,49 @@ class BatchPreparation:
 
         """
 
-        dataset = self.dataset.build_dataset()
-        loader = DataLoader(dataset, 
-                            collate_fn=collate_fn,
+        self.dataset = self.manifest
+        loader = DataLoader(self.dataset, 
                             batch_size=self.batch_size,
+                            collate_fn=collate_fn,
                             num_workers=self.num_workers)
         
+        return loader
+    
+    def update_batch_size(self, new_batch_size):
+        loader = DataLoader(self.dataset, 
+                            batch_size=new_batch_size, 
+                            collate_fn=self.collate_function, 
+                            num_workers=self.num_workers)
         return loader
 
 
 if __name__ == "__main__":
-    print("CORAAL")
-    c = Coraal()
-    bp = BatchPreparation(c, batch_size=4)
-    loader = bp.build_dataloader(limit_audio_num=10)
+    # print("CORAAL")
+    # c = Coraal()
+    # bp = BatchPreparation(c, batch_size=4)
+    # loader = bp.build_dataloader(limit_audio_num=10)
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break
 
-    print("EDACC")
-    e = Edacc()
-    bp = BatchPreparation(e, batch_size=4)
-    loader = bp.build_dataloader(limit_audio_num=10)
+    # print("EDACC")
+    # e = Edacc()
+    # bp = BatchPreparation(e, batch_size=4)
+    # loader = bp.build_dataloader(limit_audio_num=10)
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break
 
-    print("L2Arctic")
-    l = L2Arctic()
-    bp = BatchPreparation(l, batch_size=4)
-    loader = bp.build_dataloader()
+    # print("L2Arctic")
+    # l = L2Arctic()
+    # bp = BatchPreparation(l, batch_size=4)
+    # loader = bp.build_dataloader()
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break
 
     print("SAA")
     s = SpeechAccentArchive()
@@ -204,14 +213,20 @@ if __name__ == "__main__":
     loader = bp.build_dataloader()
 
     for data in loader:
-        print(data)
+        print(len(data["audio"]))
         break
 
-    print("Mozilla")
-    m = Mozilla()
-    bp = BatchPreparation(m, batch_size=4)
-    loader = bp.build_dataloader()
-
+    loader=bp.update_batch_size(2)
+    
     for data in loader:
-        print(data)
+        print(len(data["audio"]))
         break
+
+    # print("Mozilla")
+    # m = Mozilla()
+    # bp = BatchPreparation(m, batch_size=4)
+    # loader = bp.build_dataloader()
+
+    # for data in loader:
+    #     print(data)
+    #     break

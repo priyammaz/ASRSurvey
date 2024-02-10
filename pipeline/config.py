@@ -10,11 +10,11 @@ class Config:
 
     path_to_pretrained_models: str = "models/"
 
-    datset_catalog: dict = {"CORAAL": "data/coraal", 
-                            "SpeechAccentArchive": "data/speech_accent_archive", 
-                            "EDACC": "data/edacc", 
-                            "L2Arctic": "data/l2arctic", 
-                            "MozillaCommonVoice": "data/mozilla"}
+    dataset_catalog: dict = {"CORAAL": "data/coraal", 
+                             "SpeechAccentArchive": "data/speech_accent_archive", 
+                             "EDACC": "data/edacc", 
+                             "L2Arctic": "data/l2arctic", 
+                             "MozillaCommonVoice": "data/mozilla"}
 
     model_catalog: dict = {"sew": {"processor": AutoProcessor, 
                                   "model": SEWForCTC, 

@@ -1,16 +1,12 @@
+import os
 import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from functools import reduce
 from audio_datasets import SupportedDatasets
 from dataset_loader import BatchPreparation
 from config import InferenceConfig
 from accelerate import Accelerator, utils
-from transformers import AutoProcessor, SEWForCTC, SEWDForCTC, Speech2TextProcessor, Speech2TextForConditionalGeneration, \
-                            UniSpeechForCTC, UniSpeechSatForCTC, Wav2Vec2ForCTC, Wav2Vec2ConformerForCTC, WavLMForCTC, WhisperForConditionalGeneration, \
-                                WhisperProcessor, SpeechT5Processor, SpeechT5ForSpeechToText
-
 
 class InferenceAudios:
     """
@@ -37,20 +33,26 @@ class InferenceAudios:
                  exclude_inference = None,
                  limit_parameter_size = None):
         
-        ### Initialize Dataset and Check Support ###
-        dataset = dataset()
-        assert isinstance(dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
+        ### Initialize Dataset and Sanity Checks ###
+        self.dataset = dataset()
+        assert isinstance(self.dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
+        self.path_to_results_root = self.dataset.config["path_to_results"]
+        if not os.path.isdir(self.path_to_results_root):
+            os.mkdir(self.path_to_results_root)
+
 
         ### Handle Auto BatchSize Search ###
         self.auto_batch_flag = True if batch_size == "auto" else False
         if self.auto_batch_flag:
-            self.batch_size = 128
+            self.batch_size = 64
         else:
             self.batch_size = batch_size
         
         ### Build DataLoader ###
         self.num_workers = num_workers
-        self.bp = BatchPreparation(dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+        self.bp = BatchPreparation(self.dataset, 
+                                   batch_size=self.batch_size, 
+                                   num_workers=self.num_workers)
         self.loader = self.bp.build_dataloader()
 
         ### Load in Inference Configs ###
@@ -175,7 +177,7 @@ class InferenceAudios:
                     batch = self._flatten_dict_list(batch)
 
                     ### Add Transcriptions to Batch ###
-                    batch["transcriptions"] = transcriptions
+                    batch[f"{self.model_id}_transcriptions"] = transcriptions
                     results.append(batch)
                     progress_bar.update(1)
 
@@ -201,25 +203,30 @@ class InferenceAudios:
         
     def inference(self):
         for model in self.model_catalog:
-            
-            ### Grab Checkpoint Name ###
-            chkpt = self.model_catalog[model]["configs"]["model_config"]
+            ### Check for Previous Inference Model/Data Combo ###
+            self.model_id = self.model_catalog[model]["configs"]["id"]
+            self.path_to_model_results = os.path.join(self.path_to_results_root, f"{self.model_id}.csv")
 
-            ### Load Processor and Model ###
-            processor = self.model_catalog[model]["processor"].from_pretrained(chkpt, cache_dir=self.model_store)
-            model = self.model_catalog[model]["model"].from_pretrained(chkpt, cache_dir=self.model_store)
+            if not os.path.isfile(self.path_to_model_results):
+                print(f"Inferencing {self.model_id.upper()} on {self.dataset.name}")
+                ### Grab Checkpoint Name ###
+                chkpt = self.model_catalog[model]["configs"]["model_config"]
 
+                ### Load Processor and Model ###
+                processor = self.model_catalog[model]["processor"].from_pretrained(chkpt, cache_dir=self.model_store)
+                model = self.model_catalog[model]["model"].from_pretrained(chkpt, cache_dir=self.model_store)
 
-        processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2", cache_dir=self.model_store)
-        model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2", cache_dir=self.model_store)
+                results = self.distributed_inference(processor=processor, 
+                                                    model=model, 
+                                                    forward_pass=self.whisper_forward_pass)
 
-        results = self.distributed_inference(processor=processor, 
-                                             model=model, 
-                                             forward_pass=self.whisper_forward_pass)
+                results = self._flatten_dict_list(results)
+                results = pd.DataFrame.from_dict(results)
+                results.to_csv(self.path_to_model_results, index=False)
 
-        results = self._flatten_dict_list(results)
-        results = pd.DataFrame.from_dict(results)
-        results.to_csv("whisper.csv")
+            else:
+                print(f"Already Inferenced {self.model_id} on {self.dataset.name}")
+                continue
 
         # processor = AutoProcessor.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
         # model = SEWDForCTC.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")

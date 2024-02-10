@@ -2,22 +2,24 @@ import os
 import numpy as np
 import pandas as pd
 import re
-from config import DatasetConfig as dc
+from config import DatasetConfig, InferenceConfig
 from datasets import load_from_disk, concatenate_datasets, Audio
 from dataclasses import dataclass
 
-SR = dc.sample_rate
-
 class Coraal:
     def __init__(self, 
-                 config=dc.dataset_catalog["CORAAL"]):
+                 dataset_config=DatasetConfig,
+                 inference_config=InferenceConfig):
 
-        self.config = config
-        self.path_to_coraal = config["path_to_data"]
+        self.name = "CORAAL"
+        self.config = dataset_config.dataset_catalog[self.name]
+        self.path_to_coraal = self.config["path_to_data"]
+
         self.location_dirs = ['atlanta_georgia', 'detroit_michicagn', 'lower_east_side_new_york',  \
                               'princeville_north_carolina', 'rochester_new_york', 'valdosta_georgia', \
                               'washington_dc_1968', 'washington_dc_2016']
-        self.sr = SR
+        
+        self.sr = inference_config.sample_rate
 
     def _gen_dataset(self, location):
         audio_root = os.path.join(self.path_to_coraal, location, "audios")
@@ -69,11 +71,11 @@ class Coraal:
 
 
 class SpeechAccentArchive:
-    def __init__(self, 
-                 config=dc.dataset_catalog["SpeechAccentArchive"]):
+    def __init__(self, dataset_config=DatasetConfig, **kwargs):
         
-        self.config = config
-        self.path_to_root = config["path_to_data"]
+        self.name = "SpeechAccentArchive"
+        self.config = dataset_config.dataset_catalog[self.name]
+        self.path_to_root = self.config["path_to_data"]
         self.path_to_audio = os.path.join(self.path_to_root, "recordings/recordings/")
         self.path_to_transcript = os.path.join(self.path_to_root, "reading-passage.txt")
         self.metadata = pd.read_csv(os.path.join(self.path_to_root, "speakers_all.csv"))
@@ -100,14 +102,17 @@ class SpeechAccentArchive:
 
 class Edacc:
     def __init__(self, 
-                 config=dc.dataset_catalog["EDACC"]):
+                 dataset_config=DatasetConfig,
+                 inference_config=InferenceConfig):
         
-        self.config = config
-        self.path_to_root = config["path_to_data"]
+        self.name = "EDACC"
+        self.config = dataset_config.dataset_catalog[self.name]
+        self.path_to_root = self.config["path_to_data"]
         self.path_to_files = os.path.join(self.path_to_root, "edacc_v1.0")
         self.path_to_audios = os.path.join(self.path_to_files, "data")
         self.path_to_metadata = os.path.join(self.path_to_files, "linguistic_background.csv")
-        
+
+        self.sr = inference_config["sample_rate"]
 
     def build_dataset(self):
         dataset = []
@@ -166,20 +171,21 @@ class Edacc:
         dataset = pd.concat(dataset)
 
         ### Will later sample to 16000 Hz so get start and end frame ###
-        dataset["start_frame"] = dataset["start"] * SR
-        dataset["end_frame"] = dataset["end"] * SR
+        dataset["start_frame"] = dataset["start"] * self.sr
+        dataset["end_frame"] = dataset["end"] * self.sr
 
         ### Remove any Special Characters from Transcript and Lowecase ###
         dataset["transcription"] = dataset["transcription"].str.replace('[^a-zA-Z\s]', '', regex=True).str.lower()
 
         return dataset
 
+
 class L2Arctic:
-    def __init__(self, 
-                 config=dc.dataset_catalog["L2Arctic"]):
+    def __init__(self, dataset_config=DatasetConfig, **kwargs):
         
-        self.config = config
-        self.path_to_root = config["path_to_data"]
+        self.name = "L2Arctic"
+        self.config = dataset_config.dataset_catalog[self.name]
+        self.path_to_root = self.config["path_to_data"]
         self.path_to_md = os.path.join(self.path_to_root, "README.md")
 
     def build_dataset(self):
@@ -236,11 +242,14 @@ class L2Arctic:
 
 class Mozilla:
     def __init__(self, 
-                 config=dc.dataset_catalog["MozillaCommonVoice"]):
+                 dataset_config=DatasetConfig,
+                 inference_config=InferenceConfig):
         
-        self.config = config
-        self.path_to_root = config["path_to_data"]
-        self.accented_subset = config["accent_subset"]
+        self.name = "MozillaCommonVoice"
+        self.config = dataset_config.dataset_catalog[self.name]
+        self.path_to_root = self.config["path_to_data"]
+        self.accented_subset = self.config["accent_subset"]
+        self.sr = inference_config["sample_rate"]
 
     def build_dataset(self):
         dataset = load_from_disk(os.path.join(self.path_to_root, self.accented_subset))
@@ -249,7 +258,7 @@ class Mozilla:
         dataset_test = dataset["test"]
 
         dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
-        dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
+        dataset = dataset.cast_column("audio", Audio(sampling_rate=self.sr))
 
         return dataset
     

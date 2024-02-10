@@ -180,32 +180,32 @@ class BatchPreparation:
 
 
 if __name__ == "__main__":
-    # print("CORAAL")
-    # c = Coraal()
-    # bp = BatchPreparation(c, batch_size=4)
-    # loader = bp.build_dataloader(limit_audio_num=10)
+    print("CORAAL")
+    c = Coraal()
+    bp = BatchPreparation(c, batch_size=4)
+    loader = bp.build_dataloader(limit_audio_num=10)
 
-    # for data in loader:
-    #     print(data)
-    #     break
+    for data in loader:
+        print(data)
+        break
 
-    # print("EDACC")
-    # e = Edacc()
-    # bp = BatchPreparation(e, batch_size=4)
-    # loader = bp.build_dataloader(limit_audio_num=10)
+    print("EDACC")
+    e = Edacc()
+    bp = BatchPreparation(e, batch_size=4)
+    loader = bp.build_dataloader(limit_audio_num=10)
 
-    # for data in loader:
-    #     print(data)
-    #     break
+    for data in loader:
+        print(data)
+        break
 
-    # print("L2Arctic")
-    # l = L2Arctic()
-    # bp = BatchPreparation(l, batch_size=4)
-    # loader = bp.build_dataloader()
+    print("L2Arctic")
+    l = L2Arctic()
+    bp = BatchPreparation(l, batch_size=4)
+    loader = bp.build_dataloader()
 
-    # for data in loader:
-    #     print(data)
-    #     break
+    for data in loader:
+        print(data)
+        break
 
     print("SAA")
     s = SpeechAccentArchive()
@@ -216,17 +216,12 @@ if __name__ == "__main__":
         print(len(data["audio"]))
         break
 
-    loader=bp.update_batch_size(2)
-    
+
+    print("Mozilla")
+    m = Mozilla()
+    bp = BatchPreparation(m, batch_size=4)
+    loader = bp.build_dataloader()
+
     for data in loader:
-        print(len(data["audio"]))
+        print(data)
         break
-
-    # print("Mozilla")
-    # m = Mozilla()
-    # bp = BatchPreparation(m, batch_size=4)
-    # loader = bp.build_dataloader()
-
-    # for data in loader:
-    #     print(data)
-    #     break

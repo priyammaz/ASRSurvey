@@ -2,16 +2,18 @@ import os
 import numpy as np
 import pandas as pd
 import re
-from config import Config
-from datasets import load_dataset, concatenate_datasets, Audio
+from config import DatasetConfig as dc
+from datasets import load_from_disk, concatenate_datasets, Audio
 from dataclasses import dataclass
 
-SR = Config.sample_rate
+SR = dc.sample_rate
 
 class Coraal:
-    def __init__(self, path_to_coraal=Config.dataset_catalog["CORAAL"]):
+    def __init__(self, 
+                 config=dc.dataset_catalog["CORAAL"]):
 
-        self.path_to_coraal = path_to_coraal
+        self.config = config
+        self.path_to_coraal = config["path_to_data"]
         self.location_dirs = ['atlanta_georgia', 'detroit_michicagn', 'lower_east_side_new_york',  \
                               'princeville_north_carolina', 'rochester_new_york', 'valdosta_georgia', \
                               'washington_dc_1968', 'washington_dc_2016']
@@ -67,11 +69,14 @@ class Coraal:
 
 
 class SpeechAccentArchive:
-    def __init__(self, path_to_root=Config.dataset_catalog["SpeechAccentArchive"]):
-        self.path_to_root = path_to_root
+    def __init__(self, 
+                 config=dc.dataset_catalog["SpeechAccentArchive"]):
+        
+        self.config = config
+        self.path_to_root = config["path_to_data"]
         self.path_to_audio = os.path.join(self.path_to_root, "recordings/recordings/")
         self.path_to_transcript = os.path.join(self.path_to_root, "reading-passage.txt")
-        self.metadata = pd.read_csv(os.path.join(path_to_root, "speakers_all.csv"))
+        self.metadata = pd.read_csv(os.path.join(self.path_to_root, "speakers_all.csv"))
         
         ### Load in Transcription ###
         self.load_transcript()
@@ -94,8 +99,12 @@ class SpeechAccentArchive:
 
 
 class Edacc:
-    def __init__(self, path_to_root=Config.dataset_catalog["EDACC"]):
-        self.path_to_files = os.path.join(path_to_root, "edacc_v1.0")
+    def __init__(self, 
+                 config=dc.dataset_catalog["EDACC"]):
+        
+        self.config = config
+        self.path_to_root = config["path_to_data"]
+        self.path_to_files = os.path.join(self.path_to_root, "edacc_v1.0")
         self.path_to_audios = os.path.join(self.path_to_files, "data")
         self.path_to_metadata = os.path.join(self.path_to_files, "linguistic_background.csv")
         
@@ -166,9 +175,12 @@ class Edacc:
         return dataset
 
 class L2Arctic:
-    def __init__(self, path_to_root=Config.dataset_catalog["L2Arctic"]):
-        self.path_to_root = path_to_root
-        self.path_to_md = os.path.join(path_to_root, "README.md")
+    def __init__(self, 
+                 config=dc.dataset_catalog["L2Arctic"]):
+        
+        self.config = config
+        self.path_to_root = config["path_to_data"]
+        self.path_to_md = os.path.join(self.path_to_root, "README.md")
 
     def build_dataset(self):
         ### Grab Speaker info From Markdown ###
@@ -221,23 +233,24 @@ class L2Arctic:
         data = pd.merge(transcript_data, metadata, how="left")
         return data
 
+
 class Mozilla:
-    def __init__(self, path_to_root=Config.dataset_catalog["MozillaCommonVoice"], num_proc=8):
-        self.path_to_root = path_to_root
-        self.num_proc = num_proc
+    def __init__(self, 
+                 config=dc.dataset_catalog["MozillaCommonVoice"]):
+        
+        self.config = config
+        self.path_to_root = config["path_to_data"]
+        self.accented_subset = config["accent_subset"]
 
     def build_dataset(self):
-        dataset = load_dataset("mozilla-foundation/common_voice_13_0", "en", cache_dir=self.path_to_root, num_proc=self.num_proc)
+        dataset = load_from_disk(os.path.join(self.path_to_root, self.accented_subset))
         dataset_train = dataset["train"]
         dataset_val = dataset["validation"]
         dataset_test = dataset["test"]
 
         dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
-        dataset = dataset.rename_column("sentence", "transcription")
-        dataset = dataset.remove_columns(["client_id", "path", "up_votes", "down_votes",
-                                          "locale", "segment", "variant"])
         dataset = dataset.cast_column("audio", Audio(sampling_rate=SR))
-        dataset = dataset.filter(lambda example: example["accent"]!="")
+
         return dataset
     
 

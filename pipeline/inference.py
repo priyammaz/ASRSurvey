@@ -5,7 +5,7 @@ from tqdm import tqdm
 from functools import reduce
 from audio_datasets import SupportedDatasets
 from dataset_loader import BatchPreparation
-from config import Config
+from config import InferenceConfig
 from accelerate import Accelerator, utils
 from transformers import AutoProcessor, SEWForCTC, SEWDForCTC, Speech2TextProcessor, Speech2TextForConditionalGeneration, \
                             UniSpeechForCTC, UniSpeechSatForCTC, Wav2Vec2ForCTC, Wav2Vec2ConformerForCTC, WavLMForCTC, WhisperForConditionalGeneration, \
@@ -32,35 +32,63 @@ class InferenceAudios:
                  dataset,
                  batch_size="auto", 
                  num_workers=8,
-                 model_config=None):
-    
+                 inference_config=InferenceConfig,
+                 only_inference = None, 
+                 exclude_inference = None,
+                 limit_parameter_size = None):
+        
+        ### Initialize Dataset and Check Support ###
+        dataset = dataset()
         assert isinstance(dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
 
+        ### Handle Auto BatchSize Search ###
         self.auto_batch_flag = True if batch_size == "auto" else False
         if self.auto_batch_flag:
             self.batch_size = 128
         else:
             self.batch_size = batch_size
-
+        
+        ### Build DataLoader ###
         self.num_workers = num_workers
         self.bp = BatchPreparation(dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         self.loader = self.bp.build_dataloader()
 
-        self.model_store = Config.path_to_pretrained_models
-        self.sr = Config.sample_rate
+        ### Load in Inference Configs ###
+        self.inference_config = inference_config
+        self.model_store = self.inference_config.path_to_pretrained_models
+        self.sr = self.inference_config.sample_rate
 
-        self._init_results()
+        ### Filter Inference Config to Selected Models ###
+        self.only_inference = only_inference
+        self.exlude_inference = exclude_inference
+        self.limit_parameter_size = limit_parameter_size
+
+        if (self.only_inference is not None) and (self.exlude_inference is not None):
+            raise Exception("Either limit model selection with only inference, or remove models with exlude inference")
+        
+        self.model_catalog = self._limit_model_selection(self.inference_config.model_catalog)
+
     
-    def _init_results(self):
-        self.sew_results = None
-        self.sewd_results = None
-        self.speech2text_results = None
-        self.unispeech_results = None
-        self.unispeechsat_results = None
-        self.wav2vec2_results = None
-        self.conformer_results = None
-        self.wavlm_results = None
-        self.whisper_results = None
+    def _limit_model_selection(self, model_catalog):
+        if self.only_inference is not None:
+            for model in self.model_catalog:
+                if model not in self.only_inference:
+                    model_catalog.pop(model)
+            
+        elif self.exlude_inference is not None:
+            for model in self.model_catalog:
+                if model in self.exlude_inference:
+                    model_catalog.pop(model)
+            
+        if self.limit_parameter_size is not None:
+            upper_limit_params = self.limit_parameter_size * 1000000
+            for model in self.model_catalog:
+                if self.model_catalog[model]["configs"]["params"] > upper_limit_params:
+                    model_catalog.pop(model)
+    
+        print(f"Inferencing on the Models {list(model_catalog.keys())}")
+        return model_catalog
+
 
     def _flatten_dict_list(self, results):
         final_results = {key:[] for key in results[0].keys()}
@@ -130,7 +158,6 @@ class InferenceAudios:
                 progress_bar = tqdm(range(len(loader)))
 
                 results = []
-                counter = 0 
                 for batch in loader:
                     audio = batch.pop("audio")
                     
@@ -152,14 +179,11 @@ class InferenceAudios:
                     results.append(batch)
                     progress_bar.update(1)
 
-                    counter += 1
-                    if counter == 10:
-                        break
                 return results
 
             except torch.cuda.OutOfMemoryError as e:
                 updated_batch_size = self.batch_size // 2
-                
+
                 if (self.auto_batch_flag) and (updated_batch_size > 1) and accelerator.is_local_main_process:
                     print(f"Reducing Batch Size from {self.batch_size} to {updated_batch_size}")
                     self.batch_size = updated_batch_size
@@ -176,8 +200,18 @@ class InferenceAudios:
         
         
     def inference(self):
-        processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2", cache_dir="models/")
-        model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2", cache_dir="models/")
+        for model in self.model_catalog:
+            
+            ### Grab Checkpoint Name ###
+            chkpt = self.model_catalog[model]["configs"]["model_config"]
+
+            ### Load Processor and Model ###
+            processor = self.model_catalog[model]["processor"].from_pretrained(chkpt, cache_dir=self.model_store)
+            model = self.model_catalog[model]["model"].from_pretrained(chkpt, cache_dir=self.model_store)
+
+
+        processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2", cache_dir=self.model_store)
+        model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2", cache_dir=self.model_store)
 
         results = self.distributed_inference(processor=processor, 
                                              model=model, 
@@ -202,6 +236,6 @@ class InferenceAudios:
 
 if __name__ == "__main__":
     from audio_datasets import L2Arctic
-    ia = InferenceAudios(batch_size="auto", dataset=L2Arctic())
-    ia.inference()
+    ia = InferenceAudios(batch_size="auto", dataset=L2Arctic)
+    # ia.inference()
         

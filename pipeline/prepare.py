@@ -5,6 +5,7 @@ from utils import part_number_gen, download
 from tqdm import tqdm
 from dataclasses import dataclass
 from datasets import load_dataset
+from config import DatasetConfig as dc
 
 @dataclass
 class DataLinks:
@@ -71,14 +72,15 @@ class PrepareCoraal:
 
     """
 
-    def __init__(self, path_to_root="data/coraal"):
-        self.path_to_root = path_to_root
+    def __init__(self, config=dc.dataset_catalog["CORAAL"]):
+        self.config = config
+        self.path_to_root = config["path_to_data"]
         self.coraal = DataLinks.coraal
 
         ### Check Root Exists ###
         if not os.path.isdir(self.path_to_root):
             print("Creating Root Directory")
-            os.mkdir(path_to_root)
+            os.mkdir(self.path_to_root)
     
     def prepare(self, delete_extra_files=True):
         """
@@ -142,14 +144,15 @@ class PrepareEdacc:
 
     """
 
-    def __init__(self, path_to_root="data/edacc"):
-        self.path_to_root = path_to_root
+    def __init__(self, config=dc.dataset_catalog["EDACC"]):
+        self.config = config
+        self.path_to_root = config["path_to_data"]
         self.edacc = DataLinks.edacc
 
         ### Check Root Exists ###
         if not os.path.isdir(self.path_to_root):
             print("Creating Root Directory")
-            os.mkdir(path_to_root)
+            os.mkdir(self.path_to_root)
 
     def prepare(self, delete_extra_files=False):
         """
@@ -182,17 +185,20 @@ class PrepareL2Arctic:
 
     """
     def __init__(self, 
-                 path_to_root="data/l2arctic", 
-                 downloaded_zipfile_name="l2arctic_release_v5.0.zip"):
+                 config=dc.dataset_config["L2Arctic"]):
         
-        self.path_to_root = path_to_root
-        self.zipfile = downloaded_zipfile_name
+        self.config = config
+        self.path_to_root = config["path_to_data"]
+        self.zipfile = config["download_file_name"]
         
         ### Check Root Exists ###
         if not os.path.isdir(self.path_to_root):
             print("Creating Root Directory")
             print("Drop downloaded L2Arctic Zip file into the directory")
-            os.mkdir(path_to_root)
+            os.mkdir(self.path_to_root)
+
+        assert os.path.isfile(os.path.join(self.path_to_root, self.zipfile)), f"Make sure to place {self.zipfile} in {self.path_to_root}, \
+            or check path_to_data and download_file_name in DatasetConfig"
 
     def prepare(self, delete_extra_files=True):
         """
@@ -234,17 +240,20 @@ class PrepareSpeechAccentArchive:
     """
 
     def __init__(self, 
-                 path_to_root="data/speech_accent_archive", 
-                 downloaded_zipfile_name="archive.zip"):
+                 config=dc.dataset_catalog["SpeechAccentArchive"]):
         
-        self.path_to_root = path_to_root
-        self.zipfile = downloaded_zipfile_name
+        self.config = config
+        self.path_to_root = config["path_to_data"]
+        self.zipfile = config["download_file_name"]
         
         ### Check Root Exists ###
         if not os.path.isdir(self.path_to_root):
             print("Creating Root Directory")
             print("Drop downloaded Speech Accent Archive Zip file into the directory")
-            os.mkdir(path_to_root)
+            os.mkdir(self.path_to_root)
+
+        assert os.path.isfile(os.path.join(self.path_to_root, self.zipfile)), f"Make sure to place {self.zipfile} in {self.path_to_root}, \
+            or check path_to_data and download_file_name in DatasetConfig"
 
     def prepare(self, delete_extra_files=True):
         """
@@ -262,6 +271,7 @@ class PrepareSpeechAccentArchive:
         if delete_extra_files:
             os.remove(path_to_zip)
 
+
 class PrepareMozillaCommonVoice:
 
     """
@@ -275,14 +285,15 @@ class PrepareMozillaCommonVoice:
     """
 
     def __init__(self, 
-                 path_to_root="data/mozilla"):
+                 config=dc.dataset_catalog["MozillaCommonVoice"]):
         
-        self.path_to_root = path_to_root
-        
+        self.path_to_root = config["path_to_data"]
+        self.subset_dataset_name = config["accent_subset"]
+
         ### Check Root Exists ###
         if not os.path.isdir(self.path_to_root):
             print("Creating Root Directory")
-            os.mkdir(path_to_root)
+            os.mkdir(self.path_to_root)
 
     def prepare(self, num_workers=8):
         print("This will take some time and about 130GB Hard Drive Space!")
@@ -299,9 +310,7 @@ class PrepareMozillaCommonVoice:
         dataset = dataset.filter(lambda example: example["accent"]!="", num_proc=num_workers)
         
         print("Save the Filtered Dataset to Disk")
-        dataset.save_to_disk(os.path.join(self.path_to_root, "accented_mozilla.hf"))
-
-
+        dataset.save_to_disk(os.path.join(self.path_to_root, self.subset_dataset_name))
 
 if __name__ == "__main__":
     PrepareMozillaCommonVoice().prepare()

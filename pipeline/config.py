@@ -4,17 +4,32 @@ from transformers import AutoProcessor, SEWForCTC, SEWDForCTC, Speech2TextProces
                             UniSpeechForCTC, UniSpeechSatForCTC, Wav2Vec2ForCTC, Wav2Vec2ConformerForCTC, WavLMForCTC, WhisperForConditionalGeneration, \
                                 WhisperProcessor, SpeechT5Processor, SpeechT5ForSpeechToText
 
+@dataclass
+class DatasetConfig:
+    dataset_catalog: dict = {"CORAAL": {"path_to_data": "data/coraal", 
+                                        "path_to_results": "results/coraal"}, 
+                             
+                             "SpeechAccentArchive": {"path_to_data": "data/speech_accent_archive", 
+                                                     "download_file_name": "archive.zip",
+                                                     "path_to_results": "results/speech_accent_archive"}, 
 
-class Config:
+                             "EDACC": {"path_to_data": "data/edacc", 
+                                       "path_to_results": "results/speech_accent_archive"}, 
+
+                             "L2Arctic": {"path_to_data": "data/l2arctic", 
+                                          "download_file_name": "l2arctic_release_v5.0.zip",
+                                          "path_to_results": "results/speech_accent_archive"}, 
+
+                             "MozillaCommonVoice": {"path_to_data": "data/mozilla/", 
+                                                    "accent_subset": "accented_mozilla.hf", 
+                                                    "path_to_results": "results/speech_accent_archive"}
+                            }
+
+@dataclass
+class InferenceConfig:
     sample_rate: int = 16000
 
     path_to_pretrained_models: str = "models/"
-
-    dataset_catalog: dict = {"CORAAL": "data/coraal", 
-                             "SpeechAccentArchive": "data/speech_accent_archive", 
-                             "EDACC": "data/edacc", 
-                             "L2Arctic": "data/l2arctic", 
-                             "MozillaCommonVoice": "data/mozilla"}
 
     model_catalog: dict = {"sew": {"processor": AutoProcessor, 
                                   "model": SEWForCTC, 

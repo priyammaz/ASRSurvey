@@ -6,6 +6,13 @@ from tqdm import tqdm
 from dataclasses import dataclass
 from datasets import load_dataset
 from config import DatasetConfig as dc
+from config import InferenceConfig as ic
+
+
+###################################
+####### DATASET PREPARATION #######
+###################################
+
 
 @dataclass
 class DataLinks:
@@ -312,6 +319,19 @@ class PrepareMozillaCommonVoice:
         print("Save the Filtered Dataset to Disk")
         dataset.save_to_disk(os.path.join(self.path_to_root, self.subset_dataset_name))
 
+
+###################################
+######## MODEL PREPARATION ########
+###################################
+
+class DownloadModels:
+    def __init__(self, 
+                 model_configs=ic,
+                 only_inference = None, 
+                 exclude_inference = None,
+                 limit_parameter_size = None):
+        
+        
 
 if __name__ == "__main__":
     PrepareMozillaCommonVoice().prepare()

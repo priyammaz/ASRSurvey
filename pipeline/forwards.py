@@ -25,7 +25,7 @@ def whisper_forward_pass(accelerator,
                          processor, 
                          sampling_rate,
                          model):
-        
+    
     ### Process Input and Place in Correct GPU ###
     inputs = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features.to(model.device)
 

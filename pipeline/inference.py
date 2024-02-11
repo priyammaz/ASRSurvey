@@ -6,7 +6,7 @@ from tqdm import tqdm
 from audio_datasets import SupportedDatasets
 from dataset_loader import BatchPreparation
 from config import InferenceConfig
-from accelerate import Accelerator, utils
+from accelerate import Accelerator, utils, find_executable_batch_size
 
 class InferenceAudios:
     """
@@ -26,7 +26,7 @@ class InferenceAudios:
     """
     def __init__(self, 
                  dataset,
-                 batch_size="auto", 
+                 batch_size=64, 
                  num_workers=8,
                  inference_config=InferenceConfig,
                  only_inference = None, 
@@ -42,18 +42,13 @@ class InferenceAudios:
 
 
         ### Handle Auto BatchSize Search ###
-        self.auto_batch_flag = True if batch_size == "auto" else False
-        if self.auto_batch_flag:
-            self.batch_size = 64
-        else:
-            self.batch_size = batch_size
+        self.batch_size = batch_size
         
         ### Build DataLoader ###
         self.num_workers = num_workers
         self.bp = BatchPreparation(self.dataset, 
                                    batch_size=self.batch_size, 
                                    num_workers=self.num_workers)
-        self.loader = self.bp.build_dataloader()
 
         ### Load in Inference Configs ###
         self.inference_config = inference_config
@@ -99,150 +94,84 @@ class InferenceAudios:
                 final_results[key].extend(r[key])
         return final_results
     
-    def default_forward_pass(self,
-                             accelerator,
-                             audio,
-                             processor,
-                             model):
-        
-        ### Prepare Inputs and Place in Correct GPU ###
-        inputs = processor(audio, sampling_rate=16000, return_tensors="pt", padding=True).to(model.device)
-        logits = model(**inputs).logits
-
-        ### Gather logits across GPU's ###
-        logits = accelerator.pad_across_processes(logits, dim=1)
-        logits = accelerator.gather(logits)
-        predicted_ids = torch.argmax(logits, dim=-1).cpu().tolist()
-
-        ### Decode and Cleanup Transcriptions ###
-        transcriptions = processor.batch_decode(predicted_ids)
-        transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
-        return transcriptions
-    
-    def whisper_forward_pass(self,
-                             accelerator, 
-                             audio, 
-                             processor, 
-                             model):
-        
-        ### Process Input and Place in Correct GPU ###
-        inputs = processor(audio, sampling_rate=self.sr, return_tensors="pt").input_features.to(model.device)
-
-        ### Need to Unwrap Model, we need to to .generate() but distributed method only has foward() ###
-        unwrapped_model = accelerator.unwrap_model(model)
-        generated_ids = unwrapped_model.generate(inputs=inputs)
-
-        ### Gather Logits Across GPUS ###
-        generated_ids = accelerator.pad_across_processes(generated_ids, dim=1)
-        generated_ids = accelerator.gather(generated_ids)
-
-        ### Decode and Cleanup Transcriptions ###
-        transcriptions = processor.batch_decode(generated_ids, skip_special_tokens=True)
-        transcriptions = [t.replace('[^a-zA-Z\s]', '').lower().strip() for t in transcriptions]
-        return transcriptions
-
-
 
     @torch.no_grad()
-    def distributed_inference(self, 
-                              processor, 
-                              model, 
-                              forward_pass):
+    def distributed_inference(self, processor, model, forward_pass):
         
-        ### Instantiate Accelerator and Prep Objects ###
         accelerator = Accelerator()
-        model, loader = accelerator.prepare(model, self.loader)
-        model.eval()
+
+        loader = self.bp.build_dataloader(batch_size=self.batch_size)
+
+        ### Instantiate Accelerator and Prep Objects ###
+        prepped_model, prepped_loader = accelerator.prepare(model, loader)
+        prepped_model.eval()
         
-        while True:
-            try:
-                ### Iterate through Dataset ###
-                progress_bar = tqdm(range(len(loader)))
+        ### Iterate through Dataset ###
+        progress_bar = tqdm(range(len(prepped_loader)), disable=(not accelerator.is_local_main_process))
 
-                results = []
-                for batch in loader:
-                    audio = batch.pop("audio")
-                    
-                    ### Packaged batch into a dummy list for gather later ###
-                    batch = [batch]
-
-                    ### Prep and Pass Through Model ###
-                    transcriptions = forward_pass(accelerator=accelerator,
-                                                audio=audio, 
-                                                processor=processor,
-                                                model=model)
-                
-                    ### Gather Batch Metadata ###
-                    batch = utils.gather_object(batch)
-                    batch = self._flatten_dict_list(batch)
-
-                    ### Add Transcriptions to Batch ###
-                    batch[f"{self.model_id}_transcriptions"] = transcriptions
-                    results.append(batch)
-                    progress_bar.update(1)
-
-                return results
-
-            except torch.cuda.OutOfMemoryError as e:
-                updated_batch_size = self.batch_size // 2
-
-                if (self.auto_batch_flag) and (updated_batch_size > 1) and accelerator.is_local_main_process:
-                    print(f"Reducing Batch Size from {self.batch_size} to {updated_batch_size}")
-                    self.batch_size = updated_batch_size
-                    loader = self.bp.update_batch_size(new_batch_size=self.batch_size)
-                    loader = accelerator.prepare(loader)
-                    continue
-                else:
-                    print("Failed Inference, Not Enough Memory for Model")
-                    break
+        results = []
+        for batch in prepped_loader:
+            audio = batch.pop("audio")
             
-            except Exception as e:
-                print(e.message)
-                break
+            ### Packaged batch into a dummy list for gather later ###
+            batch = [batch]
+
+            ### Prep and Pass Through Model ###
+            transcriptions = forward_pass(accelerator=accelerator,
+                                        audio=audio, 
+                                        processor=processor,
+                                        sampling_rate=self.sr,
+                                        model=prepped_model)
         
+            ### Gather Batch Metadata ###
+            batch = utils.gather_object(batch)
+            batch = self._flatten_dict_list(batch)
+
+            ### Add Transcriptions to Batch ###
+            batch[f"{self.model_id}_transcriptions"] = transcriptions
+            results.append(batch)
+            progress_bar.update(1)
+
+        return results
+            
         
-    def inference(self):
+    def inference(self, start_from="resume"):
         for model in self.model_catalog:
-            ### Check for Previous Inference Model/Data Combo ###
-            self.model_id = self.model_catalog[model]["configs"]["id"]
-            self.path_to_model_results = os.path.join(self.path_to_results_root, f"{self.model_id}.csv")
+            ### Load Processor, Model and forward_pass ###
+            processor_class = self.model_catalog[model]["processor"]
+            model_class = self.model_catalog[model]["model"]
+            forward_method = self.model_catalog[model]["forward_method"]
 
-            if not os.path.isfile(self.path_to_model_results):
-                print(f"Inferencing {self.model_id.upper()} on {self.dataset.name}")
-                ### Grab Checkpoint Name ###
-                chkpt = self.model_catalog[model]["configs"]["model_config"]
+            for model_variant in self.model_catalog[model]["configs"]:
+                
+                ### Grab Checkpoint ID and Name ###
+                self.model_id = model_variant["id"]
+                chkpt = model_variant["model_config"]
 
-                ### Load Processor and Model ###
-                processor = self.model_catalog[model]["processor"].from_pretrained(chkpt, cache_dir=self.model_store)
-                model = self.model_catalog[model]["model"].from_pretrained(chkpt, cache_dir=self.model_store)
+                ### Set Path to Results File ###
+                self.path_to_model_results = os.path.join(self.path_to_results_root, f"{self.model_id}.csv")
 
-                results = self.distributed_inference(processor=processor, 
-                                                    model=model, 
-                                                    forward_pass=self.whisper_forward_pass)
+                if not os.path.isfile(self.path_to_model_results) or (start_from == "scratch"):
+                    print(f"Inferencing {self.model_id.upper()} on {self.dataset.name}")
 
-                results = self._flatten_dict_list(results)
-                results = pd.DataFrame.from_dict(results)
-                results.to_csv(self.path_to_model_results, index=False)
-
-            else:
-                print(f"Already Inferenced {self.model_id} on {self.dataset.name}")
-                continue
-
-        # processor = AutoProcessor.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
-        # model = SEWDForCTC.from_pretrained("asapp/sew-d-base-plus-400k-ft-ls100h", cache_dir="models/")
-
-        # results = self.distributed_inference(processor=processor, 
-        #                                      model=model, 
-        #                                      forward_pass=self.default_forward_pass)
- 
-        # results = self._flatten_dict_list(results)
-        # results = pd.DataFrame.from_dict(results)
-        # results.to_csv("sewd.csv")
+                    ### Load Pre-Trained Model Class and Processor ###
+                    processor = processor_class.from_pretrained(chkpt, cache_dir=self.model_store)
+                    model = model_class.from_pretrained(chkpt, cache_dir=self.model_store)
             
+                    results = self.distributed_inference(processor=processor, 
+                                                         model=model, 
+                                                         forward_pass=forward_method)
+
+                    results = self._flatten_dict_list(results)
+                    results = pd.DataFrame.from_dict(results)
+                    results.to_csv(self.path_to_model_results, index=False)
+
+                elif (start_from == "resume"):
+                    print(f"Already Inferenced {self.model_id} on {self.dataset.name}")
+                    continue
 
 
 if __name__ == "__main__":
     from audio_datasets import L2Arctic
-    ia = InferenceAudios(batch_size="auto", dataset=L2Arctic)
-    # ia.inference()
-        
+    ia = InferenceAudios(batch_size=32, dataset=L2Arctic)
+    ia.inference()

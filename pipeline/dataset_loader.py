@@ -3,10 +3,10 @@ import numpy as np
 import librosa
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from config import Config
+from config import InferenceConfig
 from audio_datasets import Coraal, SpeechAccentArchive, Edacc, L2Arctic, Mozilla
 
-SR = Config.sample_rate
+SR = InferenceConfig.sample_rate
 
 class AudioLoader(Dataset):
     def __init__(self, dataset, load_array=True):
@@ -57,23 +57,30 @@ class BatchPreparation:
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-    def build_dataloader(self, limit_audio_num=None):
+        self.build_dataset()
 
+    def build_dataset(self, limit_audio_num=None):
         if isinstance(self.dataset_class, (Coraal, Edacc)):
-            self.collate_function = self._collate_function
-            dataloader = self.pre_batch_data(collate_fn=self.collate_function,
-                                             limit_audio_num=limit_audio_num)
-            
+            self.pre_batch_data(limit_audio_num=limit_audio_num)
         elif isinstance(self.dataset_class, (SpeechAccentArchive, L2Arctic)):
-            self.collate_function = self._collate_function
-            dataloader = self.realtime_load(collate_fn=self.collate_function)
+            self.realtime_load()
+        elif isinstance(self.dataset_class, (Mozilla)):
+            self.huggingface_loader()
 
+    
+    def build_dataloader(self, batch_size):
+        if isinstance(self.dataset_class, (Coraal, Edacc, SpeechAccentArchive, L2Arctic)):
+            self.collate_function = self._collate_function
         elif isinstance(self.dataset_class, (Mozilla)):
             self.collate_function = self._mozilla_collate_function
-            dataloader = self.huggingface_loader(collate_fn=self.collate_function)
-        
-        return dataloader
 
+        loader = DataLoader(self.dataset, 
+                            batch_size=batch_size, 
+                            collate_fn=self.collate_function, 
+                            num_workers=self.num_workers)
+        
+        return loader 
+    
     def _collate_function(self, examples):
         
         """
@@ -100,7 +107,7 @@ class BatchPreparation:
             e["audio"] = e["audio"]["array"]
         return self._collate_function(examples)
 
-    def pre_batch_data(self, collate_fn, limit_audio_num=None):
+    def pre_batch_data(self, limit_audio_num=None):
 
         """
         Loads all data to memory and then cuts/batches segments for inference 
@@ -134,14 +141,8 @@ class BatchPreparation:
 
 
         self.dataset = AudioLoader(samples, load_array=False)
-        loader = DataLoader(self.dataset, 
-                            batch_size=self.batch_size, 
-                            collate_fn=collate_fn, 
-                            num_workers=self.num_workers)
-        
-        return loader
 
-    def realtime_load(self, collate_fn):
+    def realtime_load(self):
 
         """
         Load audios as they come in with super simple Dataset class AudioLoader
@@ -149,14 +150,8 @@ class BatchPreparation:
         """
 
         self.dataset = AudioLoader(self.manifest)
-        loader = DataLoader(self.dataset, 
-                            batch_size=self.batch_size, 
-                            collate_fn=collate_fn,
-                            num_workers=self.num_workers)
-        
-        return loader
     
-    def huggingface_loader(self, collate_fn):
+    def huggingface_loader(self):
         
         """
         Load audios from huggingface datasets, currently only tested for Mozilla
@@ -164,20 +159,6 @@ class BatchPreparation:
         """
 
         self.dataset = self.manifest
-        loader = DataLoader(self.dataset, 
-                            batch_size=self.batch_size,
-                            collate_fn=collate_fn,
-                            num_workers=self.num_workers)
-        
-        return loader
-    
-    def update_batch_size(self, new_batch_size):
-        loader = DataLoader(self.dataset, 
-                            batch_size=new_batch_size, 
-                            collate_fn=self.collate_function, 
-                            num_workers=self.num_workers)
-        return loader
-
 
 if __name__ == "__main__":
     print("CORAAL")

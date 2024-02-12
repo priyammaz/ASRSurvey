@@ -249,7 +249,7 @@ class Mozilla:
         self.config = dataset_config.dataset_catalog[self.name]
         self.path_to_root = self.config["path_to_data"]
         self.accented_subset = self.config["accent_subset"]
-        self.sr = inference_config["sample_rate"]
+        # self.sr = inference_config["sample_rate"]
 
     def build_dataset(self):
         dataset = load_from_disk(os.path.join(self.path_to_root, self.accented_subset))
@@ -258,8 +258,9 @@ class Mozilla:
         dataset_test = dataset["test"]
 
         dataset = concatenate_datasets([dataset_train, dataset_val, dataset_test])
-        dataset = dataset.cast_column("audio", Audio(sampling_rate=self.sr))
+        dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
+        print(dataset)
         return dataset
     
 

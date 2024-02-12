@@ -8,7 +8,7 @@ from dataset_loader import BatchPreparation
 from config import InferenceConfig
 from accelerate import Accelerator, utils
 
-class InferenceAudios:
+class DataParallelInference:
     """
     Class to inference a supported dataset on a wide variety of ASR Models on the Huggingface Platform.
     The models we will be exploring are:
@@ -26,18 +26,22 @@ class InferenceAudios:
     """
     def __init__(self, 
                  dataset,
+                 model_id,
                  num_workers=8,
-                 inference_config=InferenceConfig,
-                 only_inference = None, 
-                 exclude_inference = None,
-                 limit_parameter_size = None):
+                 inference_config=InferenceConfig):
         
+        ### Initialize Accelerator Class ###
+        self.accelerator = Accelerator()
+
         ### Initialize Dataset and Sanity Checks ###
         self.dataset = dataset()
-        assert isinstance(self.dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
+        if self.accelerator.is_main_process:
+            assert isinstance(self.dataset, SupportedDatasets.supported_dataset), "Make sure to use one of the datasets shown in the config"
+
         self.path_to_results_root = self.dataset.config["path_to_results"]
-        if not os.path.isdir(self.path_to_results_root):
-            os.mkdir(self.path_to_results_root)
+        if self.accelerator.is_main_process:
+            if not os.path.isdir(self.path_to_results_root):
+                os.mkdir(self.path_to_results_root)
         
         ### Build DataLoader ###
         self.bp = BatchPreparation(self.dataset, 
@@ -48,51 +52,25 @@ class InferenceAudios:
         self.model_store = self.inference_config.path_to_pretrained_models
         self.sr = self.inference_config.sample_rate
 
-        ### Filter Inference Config to Selected Models ###
-        self.only_inference = only_inference
-        self.exlude_inference = exclude_inference
-        self.limit_parameter_size = limit_parameter_size
+        ### Select Model Configuration ###
+        self.model_id = model_id
+        self.model_config = self._model_selection(self.inference_config.model_catalog)
 
-        if (self.only_inference is not None) and (self.exlude_inference is not None):
-            raise Exception("Either limit model selection with only inference, or remove models with exlude inference")
-        
-        self.model_catalog = self._limit_model_selection(self.inference_config.model_catalog)
+    def _model_selection(self, model_catalog):
+        found_model = False
+        for model in model_catalog:
+            for config in model_catalog[model]["configs"]:
+                if config["id"] == self.model_id:
+                    self.chkpt = config["model_config"]
+                    self.batch_size = config["batch_size"]
+                    self.processor_class = model_catalog[model]["processor"]
+                    self.model_class = model_catalog[model]["model"]
+                    self.forward_method = model_catalog[model]["forward_method"]
+                    found_model = True
 
-    
-    def _limit_model_selection(self, model_catalog):
-        if self.only_inference is not None:
-            for model in list(model_catalog):
-                if model not in self.only_inference:
-                    model_catalog.pop(model)
-            
-        elif self.exlude_inference is not None:
-            for model in list(model_catalog):
-                if model in self.exlude_inference:
-                    model_catalog.pop(model)
-            
-        if self.limit_parameter_size is not None:
-
-            factor_map = {"M": 1000000, 
-                          "B": 1000000000}
-            
-            if isinstance(self.limit_parameter_size, str):
-                number, factor = float(self.limit_parameter_size[:-1]), self.limit_parameter_size[-1]
-                assert factor in factor_map.keys(), "Make sure input is integer or in string form i.e. 100M for 100 Million or 1B for 1 Billion"
-                upper_limit_params = number * factor_map[factor]
-            
-            elif isinstance(self.limit_parameter_size, int): 
-                upper_limit_params = self.limit_parameter_size
-
-            else:
-                raise Exception("Make sure Input is in correct format: Integer Input (2000000), or String Input (20M -> 20 million, 1B -> 1 Billion)")
-
-            for model in list(model_catalog):
-                for idx, variant in enumerate(model_catalog[model]["configs"]):
-                    if variant["params"] > upper_limit_params:
-                        model_catalog[model]["configs"].pop(idx)
-
-        return model_catalog
-
+       
+        if self.accelerator.is_main_process and not found_model:
+            raise Exception(f"Modlel ID {self.model_id} not available in InferenceConfig.model_catalog!!!")
 
     def _flatten_dict_list(self, results):
         final_results = {key:[] for key in results[0].keys()}
@@ -100,94 +78,116 @@ class InferenceAudios:
             for key in final_results.keys():
                 final_results[key].extend(r[key])
         return final_results
-    
 
     @torch.no_grad()
     def distributed_inference(self, batch_size, processor, model, forward_pass):
+
+        if self.accelerator.is_main_process:
+            print(f"Inferencing {self.model_id.upper()} on {self.dataset.name}")
+
+        loader = self.bp.build_dataloader(batch_size=batch_size)
+
+        ### Instantiate Accelerator and Prep Objects ###
+        prepped_model, prepped_loader = self.accelerator.prepare(model, loader)
+        prepped_model.eval()
         
-        accelerator = Accelerator()
+        ### Iterate through Dataset ###
+        progress_bar = tqdm(range(len(prepped_loader)), disable=(not self.accelerator.is_local_main_process))
 
-        try:
-            if accelerator.is_main_process:
-                print(f"Inferencing {self.model_id.upper()} on {self.dataset.name}")
-
-            loader = self.bp.build_dataloader(batch_size=batch_size)
-
-            ### Instantiate Accelerator and Prep Objects ###
-            prepped_model, prepped_loader = accelerator.prepare(model, loader)
-            prepped_model.eval()
+        results = []
+        for batch in prepped_loader:
+            audio = batch.pop("audio")
             
-            ### Iterate through Dataset ###
-            progress_bar = tqdm(range(len(prepped_loader)), disable=(not accelerator.is_local_main_process))
+            ### Packaged batch into a dummy list for gather later ###
+            batch = [batch]
 
-            results = []
-            for batch in prepped_loader:
-                audio = batch.pop("audio")
-                
-                ### Packaged batch into a dummy list for gather later ###
-                batch = [batch]
-
-                ### Prep and Pass Through Model ###
-                transcriptions = forward_pass(accelerator=accelerator,
-                                            audio=audio, 
-                                            processor=processor,
-                                            sampling_rate=self.sr,
-                                            model=prepped_model)
-            
-                ### Gather Batch Metadata ###
-                batch = utils.gather_object(batch)
-                batch = self._flatten_dict_list(batch)
-
-                ### Add Transcriptions to Batch ###
-                batch[f"{self.model_id}_transcriptions"] = transcriptions
-                results.append(batch)
-                progress_bar.update(1)
-
-            return results
+            ### Prep and Pass Through Model ###
+            transcriptions = forward_pass(accelerator=self.accelerator,
+                                          audio=audio, 
+                                          processor=processor,
+                                          sampling_rate=self.sr,
+                                          model=prepped_model)
         
-        except torch.cuda.OutOfMemoryError:
-            if accelerator.is_main_process:
-                print(f"Too Large of a Batch Size for model {self.model_id.upper()}, Reduce in InferenceConfig and rerun with start_from='resume'")
-            return None
+            ### Gather Batch Metadata ###
+            batch = utils.gather_object(batch)
+            batch = self._flatten_dict_list(batch)
+
+            ### Add Transcriptions to Batch ###
+            batch[f"{self.model_id}_transcriptions"] = transcriptions
+            results.append(batch)
+            progress_bar.update(1)
+
+        return results
         
     def inference(self, start_from="resume"):
-        for model in self.model_catalog:
-            ### Load Processor, Model and forward_pass ###
-            processor_class = self.model_catalog[model]["processor"]
-            model_class = self.model_catalog[model]["model"]
-            forward_method = self.model_catalog[model]["forward_method"]
 
-            for model_variant in self.model_catalog[model]["configs"]:
-                
-                ### Grab Checkpoint ID and Name ###
-                self.model_id = model_variant["id"]
-                chkpt = model_variant["model_config"]
-                batch_size = model_variant["batch_size"]
+        ### Set Path to Results File ###
+        self.path_to_model_results = os.path.join(self.path_to_results_root, f"{self.model_id}.csv")
 
-                ### Set Path to Results File ###
-                self.path_to_model_results = os.path.join(self.path_to_results_root, f"{self.model_id}.csv")
+        if not os.path.isfile(self.path_to_model_results) or (start_from == "scratch"):
 
-                if not os.path.isfile(self.path_to_model_results) or (start_from == "scratch"):
+            ### Load Pre-Trained Model Class and Processor ###
+            processor = self.processor_class.from_pretrained(self.chkpt, cache_dir=self.model_store)
+            model = self.model_class.from_pretrained(self.chkpt, cache_dir=self.model_store)
+    
+            results = self.distributed_inference(batch_size=self.batch_size,
+                                                    processor=processor, 
+                                                    model=model, 
+                                                    forward_pass=self.forward_method)
 
-                    ### Load Pre-Trained Model Class and Processor ###
-                    processor = processor_class.from_pretrained(chkpt, cache_dir=self.model_store)
-                    model = model_class.from_pretrained(chkpt, cache_dir=self.model_store)
-            
-                    results = self.distributed_inference(batch_size=batch_size,
-                                                         processor=processor, 
-                                                         model=model, 
-                                                         forward_pass=forward_method)
+            if results is not None:
+                results = self._flatten_dict_list(results)
+                results = pd.DataFrame.from_dict(results)
+                results.to_csv(self.path_to_model_results, index=False)
 
-                    if results is not None:
-                        results = self._flatten_dict_list(results)
-                        results = pd.DataFrame.from_dict(results)
-                        results.to_csv(self.path_to_model_results, index=False)
+        elif (start_from == "resume"):
+            print(f"Already Inferenced {self.model_id} on {self.dataset.name}")
 
-                elif (start_from == "resume"):
-                    print(f"Already Inferenced {self.model_id} on {self.dataset.name}")
-                    continue
+        ### Clear Memory for Next Iteration ###        
+        self.accelerator.free_memory()
 
 if __name__ == "__main__":
     from audio_datasets import L2Arctic
-    ia = InferenceAudios(dataset=L2Arctic)
-    ia.inference()
+
+    ia = DataParallelInference(dataset=L2Arctic, model_id="sew_small")
+    try:
+        ia.inference()
+    except:
+        ia.accelerator.free_memory()
+        print("failed")
+
+    ia = DataParallelInference(dataset=L2Arctic, model_id="whisper_medium")
+    try:
+        ia.inference()
+    except:
+        ia.accelerator.free_memory()
+        print("failed")
+
+    ia = DataParallelInference(dataset=L2Arctic, model_id="whisper_medium")
+    try:
+        ia.inference()
+    except:
+        ia.accelerator.free_memory()
+        print("failed")
+
+    ia = DataParallelInference(dataset=L2Arctic, model_id="sew_small")
+    try:
+        ia.inference()
+    except:
+        ia.accelerator.free_memory()
+        print("failed")
+
+    ia = DataParallelInference(dataset=L2Arctic, model_id="whisper_medium")
+    try:
+        ia.inference()
+    except:
+        ia.accelerator.free_memory()
+        print("failed")
+
+    ia = DataParallelInference(dataset=L2Arctic, model_id="sew_small")
+    try:
+        ia.inference()
+    except:
+        ia.accelerator.free_memory()
+        print("failed")
+

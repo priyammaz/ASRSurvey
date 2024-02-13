@@ -49,12 +49,10 @@ class BatchPreparation:
 
     def __init__(self, 
                  dataset, 
-                 batch_size=128, 
                  num_workers=0):
         
         self.dataset_class = dataset
         self.manifest = self.dataset_class.build_dataset()
-        self.batch_size = batch_size
         self.num_workers = num_workers
 
         self.build_dataset()
@@ -161,48 +159,48 @@ class BatchPreparation:
         self.dataset = self.manifest
 
 if __name__ == "__main__":
-    print("CORAAL")
-    c = Coraal()
-    bp = BatchPreparation(c, batch_size=4)
-    loader = bp.build_dataloader(limit_audio_num=10)
+    # print("CORAAL")
+    # c = Coraal()
+    # bp = BatchPreparation(c, batch_size=4)
+    # loader = bp.build_dataloader(limit_audio_num=10)
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break
 
-    print("EDACC")
-    e = Edacc()
-    bp = BatchPreparation(e, batch_size=4)
-    loader = bp.build_dataloader(limit_audio_num=10)
+    # print("EDACC")
+    # e = Edacc()
+    # bp = BatchPreparation(e, batch_size=4)
+    # loader = bp.build_dataloader(limit_audio_num=10)
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break
 
-    print("L2Arctic")
-    l = L2Arctic()
-    bp = BatchPreparation(l, batch_size=4)
-    loader = bp.build_dataloader()
+    # print("L2Arctic")
+    # l = L2Arctic()
+    # bp = BatchPreparation(l, batch_size=4)
+    # loader = bp.build_dataloader()
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break
 
     print("SAA")
     s = SpeechAccentArchive()
-    bp = BatchPreparation(s, batch_size=4)
-    loader = bp.build_dataloader()
+    bp = BatchPreparation(s)
+    loader = bp.build_dataloader(batch_size=4)
 
     for data in loader:
-        print(len(data["audio"]))
+        print(data["audio"])
         break
 
 
-    print("Mozilla")
-    m = Mozilla()
-    bp = BatchPreparation(m, batch_size=4)
-    loader = bp.build_dataloader()
+    # print("Mozilla")
+    # m = Mozilla()
+    # bp = BatchPreparation(m, batch_size=4)
+    # loader = bp.build_dataloader()
 
-    for data in loader:
-        print(data)
-        break
+    # for data in loader:
+    #     print(data)
+    #     break

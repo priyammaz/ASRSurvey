@@ -4,10 +4,11 @@ import zipfile
 from utils import part_number_gen, download
 from tqdm import tqdm
 from dataclasses import dataclass
+import pandas as pd
+import librosa
 from datasets import load_dataset
 from config import DatasetConfig as dc
 from config import InferenceConfig as ic
-
 
 ###################################
 ####### DATASET PREPARATION #######
@@ -192,7 +193,7 @@ class PrepareL2Arctic:
 
     """
     def __init__(self, 
-                 config=dc.dataset_config["L2Arctic"]):
+                 config=dc.dataset_catalog["L2Arctic"]):
         
         self.config = config
         self.path_to_root = config["path_to_data"]
@@ -252,6 +253,8 @@ class PrepareSpeechAccentArchive:
         self.config = config
         self.path_to_root = config["path_to_data"]
         self.zipfile = config["download_file_name"]
+        self.path_to_audio = os.path.join(self.path_to_root, "recordings/recordings/")
+        self.sampling_rate = ic.sample_rate
         
         ### Check Root Exists ###
         if not os.path.isdir(self.path_to_root):
@@ -277,6 +280,25 @@ class PrepareSpeechAccentArchive:
 
         if delete_extra_files:
             os.remove(path_to_zip)
+
+        metadata = pd.read_csv(os.path.join(self.path_to_root, "speakers_all.csv"),
+                               usecols=["age", "birthplace", "native_language", "sex", "filename"])
+        metadata["path_to_audio"] = self.path_to_audio + metadata["filename"] + ".mp3"
+        
+        ### Check If Any Missing Files ###
+        metadata["audio_check"] = metadata["path_to_audio"].map(lambda x: os.path.isfile(x))
+        metadata = metadata.loc[metadata["audio_check"] == True].reset_index(drop=True)
+        metadata = metadata.drop(columns="audio_check")
+        
+        ### Add Audio Length Column for Future Filtering ###
+        print("Computing Audio Duration for All Available Files")
+        audios_durations = []
+        for path in tqdm(metadata["path_to_audio"]):
+            y, sr = librosa.load(path)
+            audios_durations.append(len(y) / sr)
+            
+        metadata["audio_duration"] = audios_durations
+        metadata.to_csv(os.path.join(self.path_to_root, "speakers_all.csv"), index=False)
 
 
 class PrepareMozillaCommonVoice:
@@ -324,14 +346,14 @@ class PrepareMozillaCommonVoice:
 ######## MODEL PREPARATION ########
 ###################################
 
-class DownloadModels:
-    def __init__(self, 
-                 model_configs=ic,
-                 only_inference = None, 
-                 exclude_inference = None,
-                 limit_parameter_size = None):
+# class DownloadModels:
+#     def __init__(self, 
+#                  model_configs=ic,
+#                  only_inference = None, 
+#                  exclude_inference = None,
+#                  limit_parameter_size = None):
         
         
 
 if __name__ == "__main__":
-    PrepareMozillaCommonVoice().prepare()
+    PrepareSpeechAccentArchive().prepare()

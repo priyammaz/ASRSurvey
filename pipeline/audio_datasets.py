@@ -91,13 +91,10 @@ class SpeechAccentArchive:
         ### Cleanup double spaces ###
         self.transcript = " ".join(transcript.split())
         
-    def build_dataset(self):
-        self.metadata["path_to_audio"] = self.path_to_audio + self.metadata["filename"] + ".mp3"
-        self.metadata["audio_check"] = self.metadata["path_to_audio"].map(lambda x: os.path.isfile(x))
-        self.metadata = self.metadata.loc[self.metadata["audio_check"] == True].reset_index(drop=True)
-        self.metadata = self.metadata[["age", "birthplace", "native_language", "sex", "path_to_audio"]]
+    def build_dataset(self, max_audio_length=30):
         self.metadata["transcription"] = self.transcript
-        return self.metadata
+        self.metadata = self.metadata[self.metadata["audio_duration"] < max_audio_length].drop(columns="audio_duration")
+        return self.metadata.reset_index(drop=True)
 
 
 class Edacc:

@@ -27,8 +27,6 @@ class DDPInference:
     """
     def __init__(self, 
                  dataset,
-                 model_id,
-                 batch_size,
                  num_workers=8,
                  accelerator=None,
                  inference_config=InferenceConfig):
@@ -47,33 +45,29 @@ class DDPInference:
                 os.mkdir(self.path_to_results_root)
         
         ### Build DataLoader ###
-        self.batch_size = batch_size
         self.bp = BatchPreparation(self.dataset, 
                                    num_workers=num_workers)
 
         ### Load in Inference Configs ###
         self.inference_config = inference_config
+        self.model_catalog = self.inference_config.model_catalog
         self.model_store = self.inference_config.path_to_pretrained_models
         self.sr = self.inference_config.sample_rate
 
-        ### Select Model Configuration ###
-        self.model_id = model_id
-        self.model_config = self._model_selection(self.inference_config.model_catalog)
-
-    def _model_selection(self, model_catalog):
+    def _model_parts_selection(self):
         found_model = False
         self.chkpt = None
         self.processor_class = None
         self.model_class = None
         self.forward_method = None
 
-        for model in model_catalog:
-            for config in model_catalog[model]["configs"]:
+        for model in self.model_catalog:
+            for config in self.model_catalog[model]["configs"]:
                 if config["id"] == self.model_id:
                     self.chkpt = config["model_config"]
-                    self.processor_class = model_catalog[model]["processor"]
-                    self.model_class = model_catalog[model]["model"]
-                    self.forward_method = model_catalog[model]["forward_method"]
+                    self.processor_class = self.model_catalog[model]["processor"]
+                    self.model_class = self.model_catalog[model]["model"]
+                    self.forward_method = self.model_catalog[model]["forward_method"]
                     found_model = True
         
         if not found_model:
@@ -121,8 +115,15 @@ class DDPInference:
         return results
     
     @torch.inference_mode()
-    def inference(self, start_from="resume"):
+    def inference(self, model_id, batch_size, start_from="resume"):
         
+        ### Define Inference Parameters ###
+        self.batch_size = batch_size
+        self.model_id = model_id
+
+        ### Grab Model Inference Parts ###
+        self._model_parts_selection()
+
         try:
             if self.chkpt is not None:
                 ### Set Path to Results File ###
@@ -134,7 +135,7 @@ class DDPInference:
                     processor = self.processor_class.from_pretrained(self.chkpt, cache_dir=self.model_store)
                     model = self.model_class.from_pretrained(self.chkpt, cache_dir=self.model_store)
 
-                    loader = self.bp.build_dataloader(batch_size=self.batch_size)
+                    loader = self.bp.build_dataloader(batch_size=batch_size)
 
                     ### Instantiate Accelerator and Prep Objects ###
                     model, loader = self.accelerator.prepare(model, loader)
@@ -166,7 +167,7 @@ class DDPInference:
             else:
                 raise KeyError(f"Cant Find Model {self.model_id} in InferenceConfig.model_catalog")
             
-        except Exception as e:
+        except Exception as error:
             model = model.to("cpu")
             del model, processor, loader 
             self.accelerator.free_memory()
@@ -174,28 +175,36 @@ class DDPInference:
             gc.collect()
             self.accelerator.wait_for_everyone()
 
-
             if self.accelerator.is_main_process:
                 print("Cleared Memory")
-                print("Error:", type(e).__name__)
+                print("Error:", type(error).__name__)
 
-            raise e
+            raise error
 
 
-class InferencePipeline:
+class DDPMultiModelsInference(DDPInference):
     def __init__(self, 
-                 accelerator,
                  dataset, 
                  only_inference=None, 
                  exclude_inference=None,
                  limit_parameter_size=None,
+                 accelerator=None,
+                 num_workers=8,
                  inference_config=InferenceConfig):
         
-        ### Store Dataset Instance ###
-        self.dataset = dataset 
+        ### Initialize Accelerator ###
+        self.accelerator = accelerator if accelerator is not None else Accelerator()
+
+        ### Initialize DDPInference Class
+        super().__init__(dataset=dataset, 
+                         num_workers=num_workers, 
+                         accelerator=accelerator, 
+                         inference_config=inference_config)
+ 
 
         ### Filter Inference Config to Selected Models ###
         self.inference_config = inference_config
+        self.model_catalog = self.inference_config.model_catalog
         self.only_inference = only_inference
         self.exlude_inference = exclude_inference
         self.limit_parameter_size = limit_parameter_size
@@ -203,19 +212,19 @@ class InferencePipeline:
         if (self.only_inference is not None) and (self.exlude_inference is not None):
             raise Exception("Either limit model selection with only inference, or remove models with exlude inference")
 
-        self.model_catalog = self._limit_model_selection(self.inference_config.model_catalog)
+        self._filter_model_selection()
 
 
-    def _limit_model_selection(self, model_catalog):
+    def _filter_model_selection(self):
         if self.only_inference is not None:
-            for model in list(model_catalog):
+            for model in list(self.model_catalog):
                 if model not in self.only_inference:
-                    model_catalog.pop(model)
+                    self.model_catalog.pop(model)
 
         elif self.exlude_inference is not None:
-            for model in list(model_catalog):
+            for model in list(self.model_catalog):
                 if model in self.exlude_inference:
-                    model_catalog.pop(model)
+                    self.model_catalog.pop(model)
 
         if self.limit_parameter_size is not None:
 
@@ -233,77 +242,72 @@ class InferencePipeline:
             else:
                 raise Exception("Make sure Input is in correct format: Integer Input (2000000), or String Input (20M -> 20 million, 1B -> 1 Billion)")
 
-            for model in list(model_catalog):
-                for idx, variant in enumerate(model_catalog[model]["configs"]):
+            for model in list(self.model_catalog):
+                for idx, variant in enumerate(self.model_catalog[model]["configs"]):
                     if variant["params"] > upper_limit_params:
-                        model_catalog[model]["configs"].pop(idx)
+                        self.model_catalog[model]["configs"].pop(idx)
 
-        return model_catalog
+        self.selected_models = []
+        self.starting_batch_size = []
+        for model in self.model_catalog:
+            for variants in self.model_catalog[model]["configs"]:
+                self.selected_models.append(variants["id"])
+                self.starting_batch_size.append(variants["batch_size"])
 
+        if self.accelerator.is_main_process:
+            print(f"Inferencing on {len(self.selected_models)} Model(s)")
+
+
+    def multiinference(self, batch_size="auto", starting_batch_size=None, start_from="resume"):
+        
+        self.auto_batch_size_flag = True if batch_size == "auto" else False
+        if self.auto_batch_size_flag:
+            if starting_batch_size is None:
+                inference_list = [(self.selected_models[i], self.starting_batch_size[i]) for i in range(len(self.selected_models))]
+            else:
+                inference_list = [(self.selected_models[i], starting_batch_size) for i in range(len(self.selected_models))]
+            
+        ### Loop Through All Model Ids  ###
+        for model_id, batch_size in inference_list:
+            if self.accelerator.is_main_process:
+                print(f"Inferencing {model_id.upper()} on {self.dataset.name} with Batch Size {batch_size}")
+
+            while True:
+
+                try:
+                    self.inference(model_id=model_id, 
+                                  batch_size=batch_size, 
+                                  start_from=start_from)
+                    
+                    break
+                
+                except torch.cuda.OutOfMemoryError:
+
+                    if self.auto_batch_size_flag:
+                        reduced_batch_size = batch_size // 2
+
+                        if reduced_batch_size >= 1:
+                            if self.accelerator.is_main_process:
+                                print(f"Reducing Batch Size from {batch_size} to {batch_size//2}")
+                            batch_size = reduced_batch_size
+                            continue
+                        else:
+                            print("Not enough Memory for a Batch size of 1, use limit_parameter_size to limit larger models from GPU Inference")
+                            break
+                    else:
+                        break
+
+                except Exception as error:
+                    if self.accelerator.is_main_process:
+                        print("Error:", type(error).__name__, "Skipping to Next Model!!!")
+                    break
+        
 
 
 if __name__ == "__main__":
     from audio_datasets import SpeechAccentArchive, L2Arctic
     accelerator = Accelerator()
 
-    ip = InferencePipeline()
-
-    # batch_size = 128
-    # while True:
-    #     ia = DDPInference(accelerator=accelerator,
-    #                       dataset=SpeechAccentArchive, 
-    #                       model_id="whisper_medium", batch_size=batch_size)
-    #     try:
-    #         ia.inference()
-    #         print("ITMADEITTT!!!!!")
-    #         break
-    #     except Exception as e:
-    #         print(f"Reducing batch size from {batch_size} to {batch_size//2}")
-    #         batch_size = batch_size // 2
-    #         print(e)
-    #         continue
+    ip = DDPMultiModelsInference(dataset=SpeechAccentArchive, only_inference=["whisper"])
+    ip.multiinference()
     
-    # batch_size = 128
-    # while True:
-    #     ia = DataParallelInference(dataset=SpeechAccentArchive, model_id="whisper_large", batch_size=batch_size)
-    #     try:
-    #         ia.inference()
-    #         break
-    #     except Exception as e:
-    #         print(f"Reducing batch size from {batch_size} to {batch_size//2}")
-    #         batch_size = batch_size // 2
-    #         print(e)
-    #         continue
-
-
-    # batch_size = 128
-    # while True:
-    #     ia = DataParallelInference(dataset=SpeechAccentArchive, model_id="conformer_960_rel_large", batch_size=batch_size)
-    #     try:
-    #         ia.inference()
-    #         break
-    #     except Exception as e:
-    #         print(f"Reducing batch size from {batch_size} to {batch_size//2}")
-    #         batch_size = batch_size // 2
-    #         print(e)
-    #         continue
-    
-    # batch_size = 128
-    # while True:
-    #     ia = DataParallelInference(dataset=SpeechAccentArchive, model_id="conformer_960_rope_large", batch_size=batch_size)
-    #     try:
-    #         ia.inference()
-    #         break
-    #     except Exception as e:
-    #         print(f"Reducing batch size from {batch_size} to {batch_size//2}")
-    #         batch_size = batch_size // 2
-    #         print(e)
-    #         continue
-
-
-
-
-
-
-
-

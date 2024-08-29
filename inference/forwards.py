@@ -31,7 +31,7 @@ def whisper_forward_pass(accelerator,
 
     ### Need to Unwrap Model, we need to to .generate() but distributed method only has foward() ###
     unwrapped_model = accelerator.unwrap_model(model)
-    generated_ids = unwrapped_model.generate(inputs=inputs)
+    generated_ids = unwrapped_model.generate(input_features=inputs, language='en')
 
     ### Gather Logits Across GPUS ###
     generated_ids = accelerator.pad_across_processes(generated_ids, dim=1)
